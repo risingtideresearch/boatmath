@@ -186,7 +186,7 @@ fn small_twin() {
 #[test]
 fn the_vendored_database_reads() {
     let db = Database::vendored();
-    assert_eq!(db.motors.len(), 159);
+    assert_eq!(db.motors.len(), 192);
     assert_eq!(db.maps.len(), 2);
     assert!((db.controller_eta - 0.97).abs() < 1e-12);
 }
