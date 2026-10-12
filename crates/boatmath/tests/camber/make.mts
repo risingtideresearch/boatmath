@@ -8,7 +8,10 @@
 // plan's parameter u, the hull's aft and forward limits, and camber's
 // hydrostatics at its own design waterline. `default.json`, `cruiser.json`
 // and `flat-bottom.json` are written first: camber's default hull and two of
-// its v1 examples, read through its own v1 → v2 conversion.
+// its v1 examples, read through its own v1 → v2 conversion. `graf.json` is
+// the Graf catamaran demihull (python/tools/graf), in inches: few stations,
+// a curved sheer, a knuckled chine ledge and a bow made by the centreline
+// trim.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -38,7 +41,7 @@ for (const [name, example] of [
 }
 
 const R = 4;
-for (const name of ["default", "cruiser", "flat-bottom", "inverted-bow"]) {
+for (const name of ["default", "cruiser", "flat-bottom", "inverted-bow", "graf"]) {
   const text = readFileSync(join(dir, `${name}.json`), "utf8");
   const model = assemble(parseDocument(text).state);
   const aft = aftLimit(model),

@@ -7,7 +7,7 @@ use boatmath::camber::{Document, Hull};
 use boatmath::{hull_summary, loft, LoftRequest};
 use serde_json::Value;
 
-const NAMES: [&str; 4] = ["default", "cruiser", "flat-bottom", "inverted-bow"];
+const NAMES: [&str; 5] = ["default", "cruiser", "flat-bottom", "inverted-bow", "graf"];
 
 fn load(file: &str) -> Value {
     let path = format!("{}/tests/camber/{file}", env!("CARGO_MANIFEST_DIR"));
@@ -44,8 +44,8 @@ fn sections_are_cambers() {
                 }
             }
         }
-        // Lengths in the document's unit (mm for these), against a hull of
-        // several hundred to several thousand.
+        // Lengths in the document's unit (mm for most, inches for graf),
+        // against a hull of a few hundred to several thousand.
         assert!(worst < 1e-6, "{name}: off by {worst:e}");
         for (k, f) in [
             ("aft_limit", hull.aft_limit()),
