@@ -85,7 +85,8 @@ fn f(x) {                       # block body: the last expression is the result
 if c then a else b    and  or  not    == != < > <= >=
 ```
 
-- **Lists:** `len sum map filter concat reverse range linspace`.
+- **Lists:** `len sum map filter concat reverse range linspace`, and
+  `trapz(xs, ys)` for ∫ y dx by the trapezoid rule.
 - **Vectors:** `dot cross norm`.
 - **Math:** `sqrt abs exp ln log10 sin cos tan asin acos atan atan2 floor ceil
   round min max`.

@@ -196,11 +196,28 @@ pub fn sparkline(sorted: &[f64], lo: f64, hi: f64, bins: usize) -> String {
 }
 
 /// Compact form: `12.5 t` or `12.5 t ± 0.6`.
+/// True when a sample vector is constant but for round-off (a total whose
+/// parts' uncertainties cancel, say), so it reads better as one number.
+pub fn effectively_exact(s: &Samples) -> bool {
+    match s {
+        Samples::Exact(_) => true,
+        Samples::Dist(v) => {
+            let (lo, hi) = v
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &x| {
+                    (a.min(x), b.max(x))
+                });
+            // (or round-off about zero: display rounds below 1e-12 to 0 anyway)
+            hi - lo <= 1e-9 * hi.abs().max(lo.abs()) || hi - lo < 1e-12
+        }
+    }
+}
+
 pub fn fmt_quantity_short(q: &Quantity) -> String {
     let (u, scale) = q.display_unit();
     match &q.s {
         Samples::Exact(x) => with_unit(x / scale, &u),
-        Samples::Dist(v) if v.iter().all(|x| *x == v[0]) => with_unit(v[0] / scale, &u),
+        Samples::Dist(v) if effectively_exact(&q.s) => with_unit(v[0] / scale, &u),
         s => {
             let m = s.quantile(0.5) / scale;
             let sd = s.sd() / scale;
@@ -218,7 +235,7 @@ pub fn fmt_quantity(q: &Quantity) -> String {
     let (u, scale) = q.display_unit();
     match &q.s {
         Samples::Exact(x) => with_unit(x / scale, &u),
-        Samples::Dist(v) if v.iter().all(|x| *x == v[0]) => with_unit(v[0] / scale, &u),
+        Samples::Dist(v) if effectively_exact(&q.s) => with_unit(v[0] / scale, &u),
         s => {
             let v = s.sorted();
             let p = |q: f64| crate::samples::quantile_sorted(&v, q) / scale;

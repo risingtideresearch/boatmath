@@ -18,6 +18,7 @@ use napkin::ops::R;
 use napkin::value::Native;
 use napkin::{Dim, Interp, Quantity, Samples, UnitExpr, Value};
 
+use crate::geometry::{self, Bounds, Mesh};
 use crate::surrogate;
 
 /// A platform of hulls cut from one file: the file's hulls where they lie, or
@@ -33,6 +34,8 @@ pub struct BoatHull {
     design: Vec<(SectionalHull, hullgeom::Placement)>,
     /// Whole sections, keel to sheer, for GZ.
     whole: Vec<StabilityHull>,
+    /// Each layout entry as triangles in the file frame, for measuring.
+    meshes: Vec<Mesh>,
 }
 
 impl Native for BoatHull {
@@ -248,6 +251,21 @@ fn build(name: &str, source: Box<dyn HullSource>, opts: Option<&Value>) -> R<Boa
         .collect::<Vec<_>>();
     let l_ref = design.iter().map(|(h, _)| h.length()).fold(0.0, f64::max);
     let whole = whole_sections(source.as_ref(), waterline_z, &layout, &sopts, l_ref)?;
+    let meshes = layout
+        .iter()
+        .zip(&design)
+        .map(|((i, pose), (_, place))| {
+            let (v, t) = source
+                .posed_tessellation(*i, waterline_z, pose, &Platform::default())
+                .map_err(|e| e.to_string())?;
+            // Posed heights are from the waterline; the file frame's are not.
+            let v = v
+                .into_iter()
+                .map(|p| [p[0], p[1], p[2] + waterline_z])
+                .collect();
+            Ok(Mesh::new(v, t, place.y))
+        })
+        .collect::<R<Vec<_>>>()?;
     Ok(BoatHull {
         name: name.to_string(),
         source,
@@ -256,6 +274,7 @@ fn build(name: &str, source: Box<dyn HullSource>, opts: Option<&Value>) -> R<Boa
         layout,
         design,
         whole,
+        meshes,
     })
 }
 
@@ -390,6 +409,7 @@ fn hydrostatics(args: &[Value]) -> R<Value> {
     let draft = h.design.iter().map(|(s, _)| s.draft()).fold(0.0, f64::max);
     let ex = Samples::Exact;
     Ok(Value::record(vec![
+        ("waterline", q(ex(h.waterline_z), "m")),
         ("length", q(ex(h.length()), "m")),
         ("draft", q(ex(draft), "m")),
         ("volume", q(ex(vol), "m^3")),
@@ -436,7 +456,7 @@ fn float(it: &mut Interp, args: &[Value]) -> R<Value> {
     let (m, lcg, _, _) = load_of(h, &args[1])?;
     let sources = h.sources();
     // Waterplane area, wetted surface and draft kink as the transom immerses.
-    let r = surrogate::evaluate(&[&m, &lcg], &[n, n], &[4, 5, 6], |p| {
+    let r = surrogate::evaluate(&[&m, &lcg], &[n, n], &[4, 5, 6], 1e-3, |p| {
         let eq = solve_equilibrium_sectional(
             &sources,
             &LoadCase {
@@ -629,7 +649,7 @@ fn stability(it: &mut Interp, args: &[Value]) -> R<Value> {
         ..GzOptions::default()
     };
     // VCG enters the free-trim balance only through the trim, so 3 nodes suffice.
-    let r = surrogate::evaluate(&[&m, &lcg, &vcg], &[n, n, 3], &[], |p| {
+    let r = surrogate::evaluate(&[&m, &lcg, &vcg], &[n, n, 3], &[], 1e-3, |p| {
         let load = StabilityLoad {
             mass: p[0],
             lcg: p[1],
@@ -713,6 +733,176 @@ fn stability(it: &mut Interp, args: &[Value]) -> R<Value> {
     ]))
 }
 
+// ---------------------------------------------------------------- measuring
+
+/// How closely the flat-faceted mesh follows a curved hull (see `geometry`).
+const MESH_ACCURACY: f64 = 3e-3;
+
+/// The meshes an option `hull: k` picks (all of them by default). For a
+/// catamaran, hull 0 is the one at +y.
+fn pick<'a>(h: &'a BoatHull, opts: Option<&Value>) -> R<Vec<&'a Mesh>> {
+    match opt_count0(opts, "hull")? {
+        None => Ok(h.meshes.iter().collect()),
+        Some(k) if k < h.meshes.len() => Ok(vec![&h.meshes[k]]),
+        Some(k) => Err(format!(
+            "hull {} out of range: this platform has {} (numbered from 0)",
+            k,
+            h.meshes.len()
+        )),
+    }
+}
+
+fn opt_count0(opts: Option<&Value>, name: &str) -> R<Option<usize>> {
+    match opt(opts, name) {
+        None => Ok(None),
+        Some(v) => match num(v)?.s.exact() {
+            Some(x) if x >= 0.0 && x.fract() == 0.0 => Ok(Some(x as usize)),
+            _ => Err(format!("{} must be an exact whole number", name)),
+        },
+    }
+}
+
+/// A length's samples, checked.
+fn length_samples(v: &Value, what: &str) -> R<Samples> {
+    let q = num(v)?;
+    if q.dim != Dim::length() {
+        return Err(format!(
+            "{} must be a length, got {}",
+            what,
+            q.dim.describe()
+        ));
+    }
+    Ok(q.s)
+}
+
+fn point(c: [Samples; 3]) -> Value {
+    let [x, y, z] = c;
+    Value::list(vec![q(x, "m"), q(y, "m"), q(z, "m")])
+}
+
+/// Area and centroid of the shell within a box: `{x: [a, b], y: [..], z: [..]}`,
+/// each axis optional and each bound possibly uncertain.
+fn shell(it: &mut Interp, args: &[Value]) -> R<Value> {
+    arity(args, 1, 2)?;
+    let hn = hull_arg(&args[0])?;
+    let h = hn.as_any().downcast_ref::<BoatHull>().unwrap();
+    let opts = args.get(1);
+    check_opts(opts, &["x", "y", "z", "hull", "grid"])?;
+    let meshes = pick(h, opts)?;
+    // Each finite bound is an input; (axis, end) says where it goes.
+    let mut inputs: Vec<Samples> = vec![];
+    let mut slots: Vec<(usize, usize)> = vec![];
+    for (k, name) in ["x", "y", "z"].iter().enumerate() {
+        if let Some(v) = opt(opts, name) {
+            let Value::List(ends) = v else {
+                return Err(format!("{} must be a range [from, to]", name));
+            };
+            if ends.len() != 2 {
+                return Err(format!("{} must be a range [from, to]", name));
+            }
+            for (e, end) in ends.iter().enumerate() {
+                inputs.push(length_samples(end, name)?);
+                slots.push((k, e));
+            }
+        }
+    }
+    let n = grid_opt(opts)?;
+    let refs: Vec<&Samples> = inputs.iter().collect();
+    let r = surrogate::evaluate(&refs, &vec![n; refs.len()], &[], MESH_ACCURACY, |p| {
+        let mut b: Bounds = [[f64::NEG_INFINITY, f64::INFINITY]; 3];
+        for (&(k, e), &v) in slots.iter().zip(p) {
+            b[k][e] = v;
+        }
+        let (a, c) = geometry::shell(&meshes, &b);
+        Ok(vec![a, c[0], c[1], c[2]])
+    })?;
+    warn_check(it, "shell", &r);
+    let [a, x, y, z] = <[Samples; 4]>::try_from(r.outputs).unwrap();
+    Ok(Value::record(vec![
+        ("area", q(a, "m^2")),
+        ("centroid", point([x, y, z])),
+    ]))
+}
+
+/// The transverse section at `x`: its area, centroid and girth (the length of
+/// shell around it), cut off at `below` if given. An open section (a hull with
+/// no deck) is closed straight across its top.
+fn slice(it: &mut Interp, args: &[Value]) -> R<Value> {
+    arity(args, 2, 3)?;
+    let hn = hull_arg(&args[0])?;
+    let h = hn.as_any().downcast_ref::<BoatHull>().unwrap();
+    let opts = args.get(2);
+    check_opts(opts, &["below", "hull", "grid"])?;
+    let meshes = pick(h, opts)?;
+    let xs = length_samples(&args[1], "the station")?;
+    let below = match opt(opts, "below") {
+        Some(v) => Some(length_samples(v, "below")?),
+        None => None,
+    };
+    let outlines = |x: f64, zc: Option<f64>| -> Vec<geometry::Outline> {
+        let all = geometry::slice(&meshes, x);
+        match zc {
+            Some(z) => all.iter().filter_map(|o| o.below(z)).collect(),
+            None => all,
+        }
+    };
+    // Without a cut, its axis is a placeholder single node.
+    let zc = below.clone().unwrap_or(Samples::Exact(f64::NAN));
+    let n = grid_opt(opts)?;
+    let has_below = below.is_some();
+    let r = surrogate::evaluate(&[&xs, &zc], &[n, n], &[], MESH_ACCURACY, |p| {
+        let zc = if has_below { Some(p[1]) } else { None };
+        let (mut a, mut my, mut mz, mut girth) = (0.0, 0.0, 0.0, 0.0);
+        for o in outlines(p[0], zc) {
+            let (ai, c, g) = o.measure();
+            if ai > 0.0 {
+                a += ai;
+                my += ai * c[0];
+                mz += ai * c[1];
+            }
+            girth += g;
+        }
+        let (cy, cz) = if a > 0.0 {
+            (my / a, mz / a)
+        } else {
+            (f64::NAN, f64::NAN)
+        };
+        Ok(vec![a, cy, cz, girth])
+    })?;
+    warn_check(it, "slice", &r);
+    let [a, y, z, g] = <[Samples; 4]>::try_from(r.outputs).unwrap();
+    let mut fields = vec![
+        ("x", q(xs.clone(), "m")),
+        ("area", q(a, "m^2")),
+        ("centroid", point([xs.clone(), y, z])),
+        ("girth", q(g, "m")),
+    ];
+    // The outline itself, when the station is certain: [x, y, z] points per
+    // closed loop, ready for napkin's own geometry functions.
+    if let (Some(x), true) = (xs.exact(), below.as_ref().is_none_or(|b| b.is_exact())) {
+        let zc = below.as_ref().and_then(|b| b.exact());
+        let loops = outlines(x, zc)
+            .into_iter()
+            .map(|o| {
+                Value::list(
+                    o.pts
+                        .iter()
+                        .map(|p| {
+                            point([
+                                Samples::Exact(x),
+                                Samples::Exact(p[0]),
+                                Samples::Exact(p[1]),
+                            ])
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        fields.push(("outlines", Value::list(loops)));
+    }
+    Ok(Value::record(fields))
+}
+
 /// Register the hull functions on an interpreter.
 pub fn install(it: &mut Interp) {
     it.register("hull", |_, a| load_file(&a));
@@ -720,4 +910,6 @@ pub fn install(it: &mut Interp) {
     it.register("hydrostatics", |_, a| hydrostatics(&a));
     it.register("float", |it, a| float(it, &a));
     it.register("stability", |it, a| stability(it, &a));
+    it.register("shell", |it, a| shell(it, &a));
+    it.register("slice", |it, a| slice(it, &a));
 }

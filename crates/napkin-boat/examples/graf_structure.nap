@@ -1,0 +1,63 @@
+# Structural weight of the Graf catamaran from its geometry, then its float and stability.
+#
+#   cargo run --release -p napkin-boat -- crates/napkin-boat/examples/graf_structure.nap
+#
+# graf-demihull.igs lives at the repository root, outside git. Coordinates are
+# the file's: x along the hull (bow toward +x), z up, y from the centreline.
+
+let cat = hull("graf-demihull.igs", {span: 1.6 m})
+let wl = hydrostatics(cat).waterline
+
+# ---- Shell plating: area × laminate weight, at the area's centroid --------------
+# Heavier laminate below a line 100 mm above the waterline; the line itself is
+# only roughly placed yet, so it's uncertain too.
+let chine = wl + (100 ± 20 mm)
+let bottom = shell(cat, {z: [-1 m, chine]})
+let topsides = shell(cat, {z: [chine, 2 m]})
+
+fn panel(name, region, areal) = {name: name, mass: region.area * areal, cg: region.centroid}
+
+# ---- Bulkheads: each a transverse slice, both demihulls --------------------------
+fn bulkhead(name, x, areal) {
+  let s = slice(cat, x)
+  {name: name, mass: s.area * areal, cg: s.centroid}
+}
+
+# ---- Frames: girth × weight per metre, every 400 mm -------------------------------
+let frame_xs = linspace(0.4 m, 6.0 m, 15)
+let frames = map(frame_xs, |x| {
+  let s = slice(cat, x)
+  {mass: s.girth * (0.9 kg/m ± 10%), cg: s.centroid}
+})
+let framing = combine(frames, "Frames")
+
+let structure = [
+  panel("Bottom shell", bottom, 6.5 kg/m^2 ± 8%),
+  panel("Topsides", topsides, 4.2 kg/m^2 ± 8%),
+  bulkhead("Transom bulkhead", 0.05 m, 5.5 kg/m^2),
+  bulkhead("Engine-room bulkhead", 1.2 m, 4.5 kg/m^2),
+  bulkhead("Collision bulkhead", 5.6 m, 4.5 kg/m^2),
+  framing,
+  # Bonding, fairing, paint: a fraction of what's above.
+  {name: "Bonding + fairing", mass: 12% * (bottom.area + topsides.area) * 5 kg/m^2, cg: [2.9, 0, 0.1] m},
+]
+weight_table(structure)
+
+# ---- Everything else, as estimates --------------------------------------------------
+let outfit = [
+  {name: "Beams + deck",  mass: 180 to 240 kg,       cg: [3.0 ± 0.1, 0, 0.62 ± 0.05] m},
+  {name: "Motors",        mass: 2 * (85 kg ± 2%),    cg: [0.6, 0, 0.05] m},
+  {name: "Battery",       mass: 310 to 360 kg,       cg: [2.4 ± 0.1, 0, -0.05] m},
+  {name: "Cabin",         mass: 160 to 220 kg,       cg: [3.0 ± 0.15, 0, 0.95 ± 0.08] m},
+  {name: "Crew",          mass: 4 * (80 kg ± 12 kg), cg: [2.2 ± 0.4, 0.1 ± 0.2, 0.9] m},
+]
+let ship = combine(concat([combine(structure, "Structure")], outfit), "Loaded")
+weight_table(concat([combine(structure, "Structure")], outfit))
+
+let f = float(cat, ship)
+f.trim
+f.sinkage -> mm
+let s = stability(cat, ship)
+s.gm
+s.max_gz
+sensitivity(s.max_gz)

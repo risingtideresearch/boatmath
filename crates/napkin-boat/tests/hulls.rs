@@ -71,9 +71,12 @@ fn box_stl(l: f64, b: f64, d: f64) -> String {
 }
 
 fn box_file() -> String {
+    // One file per call: tests run in parallel.
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let k = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("napkin-boat-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("box.stl");
+    let path = dir.join(format!("box{k}.stl"));
     std::fs::write(&path, box_stl(10.0, 2.0, 1.5)).unwrap();
     path.to_string_lossy().into_owned()
 }
@@ -201,4 +204,99 @@ fn graf_catamaran_matches_boatmath_statics() {
     close(&out, "s.gm -> mm = ", 2435.6, 1.0);
     close(&out, "s.max_gz -> mm = ", 689.3, 0.5);
     close(&out, "s.vanishing = ", 75.39, 0.01);
+}
+
+#[test]
+fn box_shell_and_slices_are_exact() {
+    // A closed 10 × 2 × 1.5 m box: shell 2(LB + LD + BD) = 76 m²; below
+    // z = 0.5 the bottom, sides and ends make 20 + 10 + 2 = 32 m².
+    let path = box_file();
+    let out = run(&format!(
+        "let b = hull(\"{path}\", {{units: 1 m, waterline: 0.5 m}})\n\
+         shell(b).area\n\
+         shell(b, {{z: [0 m, 0.5 m]}}).area\n\
+         let s = slice(b, 5 m)\n\
+         s.area\n\
+         s.girth\n\
+         let w = slice(b, 5 m, {{below: 0.5 m}})\n\
+         w.area\n\
+         w.girth\n\
+         w.centroid[2]\n\
+         let u = shell(b, {{z: [0 m, 0.5 ± 0.05 m]}})\n\
+         mean(u.area)\n\
+         sd(u.area)\n"
+    ));
+    close(&out, "shell(b).area = ", 76.0, 1e-9);
+    close(&out, "shell(b, {z: [0 m, 0.5 m]}).area = ", 32.0, 1e-9);
+    close(&out, "s.area = ", 3.0, 1e-9);
+    close(&out, "s.girth = ", 7.0, 1e-9);
+    close(&out, "w.area = ", 1.0, 1e-9);
+    close(&out, "w.girth = ", 3.0, 1e-9);
+    close(&out, "w.centroid[2] = ", 0.25, 1e-9);
+    // The wetted band grows by the girth of sides and ends, 24 m, per metre.
+    close(&out, "mean(u.area) = ", 32.0, 0.05);
+    close(&out, "sd(u.area) = ", 24.0 * 0.05, 0.03);
+}
+
+#[test]
+fn wigley_slices_match_the_form() {
+    // y = B/2 (1 − (2x/L)²)(1 − (z/T)²): a section's area is ⅔ B T (1 − (2x/L)²),
+    // its centroid ⅜ T below the waterline.
+    let out = run("let w = wigley(10 m, 1 m, 0.625 m)\n\
+         slice(w, 0 m).area -> cm^2\n\
+         slice(w, 2.5 m).area -> cm^2\n\
+         slice(w, 0 m).centroid[2] -> mm\n\
+         shell(w).area\n\
+         hydrostatics(w).wetted\n");
+    close(
+        &out,
+        "slice(w, 0 m).area -> cm^2 = ",
+        1e4 * 2.0 / 3.0 * 0.625,
+        2.0,
+    );
+    close(
+        &out,
+        "slice(w, 2.5 m).area -> cm^2 = ",
+        1e4 * 2.0 / 3.0 * 0.625 * 0.75,
+        2.0,
+    );
+    close(
+        &out,
+        "slice(w, 0 m).centroid[2] -> mm = ",
+        -1000.0 * 0.375 * 0.625,
+        0.5,
+    );
+    let wetted = num_after(&out, "hydrostatics(w).wetted = ");
+    close(&out, "shell(w).area = ", wetted, 0.01 * wetted);
+}
+
+/// Slices integrated along the Graf demihull give its displaced volume, and
+/// its shell below the waterline its wetted surface, to the mesh's ~0.4%.
+#[test]
+fn graf_slices_and_shell_agree_with_hullgeom() {
+    let root = std::env::var("BOATMATH_CAD_DIR")
+        .unwrap_or_else(|_| format!("{}/../..", env!("CARGO_MANIFEST_DIR")));
+    let path = format!("{}/graf-demihull.igs", root);
+    if !std::path::Path::new(&path).exists() {
+        eprintln!("skipping: {} is not present (not in the repository)", path);
+        return;
+    }
+    let out = run(&format!(
+        "let h = hull(\"{path}\")\n\
+         let d = hydrostatics(h)\n\
+         let xs = linspace(0 m, 6.49 m, 131)\n\
+         trapz(xs, map(xs, |x| slice(h, x, {{below: d.waterline}}).area)) -> m^3\n\
+         d.volume\n\
+         shell(h, {{z: [-1 m, d.waterline]}}).area\n\
+         d.wetted\n"
+    ));
+    let v = num_after(&out, "d.volume = ");
+    close(&out, "}).area)) -> m^3 = ", v, 0.006 * v);
+    let s = num_after(&out, "d.wetted = ");
+    close(
+        &out,
+        "shell(h, {z: [-1 m, d.waterline]}).area = ",
+        s,
+        0.006 * s,
+    );
 }

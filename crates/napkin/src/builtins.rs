@@ -46,6 +46,7 @@ const BUILTINS: &[&str] = &[
     "map",
     "filter",
     "concat",
+    "trapz",
     "reverse",
     "range",
     "linspace",
@@ -711,7 +712,7 @@ fn weight_table(it: &mut Interp, items: &[Value]) -> R<Value> {
     let cell = |q: &Quantity| {
         let (_, scale) = q.display_unit();
         let m = q.s.quantile(0.5) / scale;
-        if q.s.is_exact() {
+        if crate::value::effectively_exact(&q.s) {
             fmt_num(m)
         } else {
             format!("{} ±{}", fmt_num(m), fmt_num(q.s.sd() / scale))
@@ -895,6 +896,22 @@ pub fn call(it: &mut Interp, name: &str, args: Vec<Value>) -> R<Value> {
                 }
             }
             Ok(Value::list(out))
+        }
+        "trapz" => {
+            // ∫ y dx by the trapezoid rule over paired lists.
+            arity(&args, 2, 2)?;
+            let (xs, ys) = (list(&args[0])?, list(&args[1])?);
+            if xs.len() != ys.len() || xs.len() < 2 {
+                return Err("needs two lists of the same length, at least 2".into());
+            }
+            let mut terms = vec![];
+            for k in 0..xs.len() - 1 {
+                let dx = ops::binop("-", &xs[k + 1], &xs[k])?;
+                let avg = ops::binop("+", &ys[k], &ys[k + 1])?;
+                let half = ops::binop("*", &avg, &Value::Num(Quantity::plain(0.5)))?;
+                terms.push(ops::binop("*", &dx, &half)?);
+            }
+            sum(&terms)
         }
         "concat" => {
             let mut out = vec![];

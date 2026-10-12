@@ -28,12 +28,61 @@ sensitivity(s.max_gz)                  # ↓ Crew.mass 39%, ↓ Crew.cg[1] 34%, 
 | `hydrostatics(hull)` | at the design waterline: `length draft volume displacement lcb awp wetted` |
 | `float(hull, item, {rho, grid})` | the free-trim hydrostatic float: `sinkage trim draft volume displacement lcb awp wetted` |
 | `stability(hull, item, {rho, grid, max_heel, step})` | `gm list max_gz heel_at_max vanishing area_30 area_40 area_total heels gz` |
+| `shell(hull, {x: [a, b], y: [..], z: [..], hull})` | `area centroid` of the shell plating inside a box (each axis optional) |
+| `slice(hull, x, {below, hull})` | the transverse section at `x`: `area centroid girth outlines`, cut off at height `below` if given |
 
 - **The load:** `item` is any record with `mass` and `cg: [x, y, z]`, such as
   the result of `combine(items)`.
 - **Density:** `rho` defaults to sea water at 15 °C (1025.9 kg/m³), as boatmath
   uses.
 - **Heels:** default 0° to 180° in 2° steps.
+- **`hydrostatics`** also gives `waterline`, the design waterline's height in
+  the file frame, for writing regions relative to it.
+- **`hull: k`** picks one hull of the platform, numbered from 0. For a
+  catamaran, hull 0 is the one at +y.
+
+## Weights from geometry
+
+`shell` and `slice` measure the hull's surface, so a weight can come from the
+shape rather than a guess. Each returns a centroid, so an item is
+`{mass: area × areal weight, cg: centroid}`.
+`examples/graf_structure.nap` builds the Graf catamaran's structure this way,
+then floats and heels it:
+
+```
+let bottom = shell(cat, {z: [-1 m, wl + (100 ± 20 mm)]})       # plating below an uncertain line
+fn bulkhead(name, x, areal) {
+  let s = slice(cat, x)                                        # both demihulls, keel to sheer
+  {name: name, mass: s.area * areal, cg: s.centroid}
+}
+let frames = map(linspace(0.4 m, 6.0 m, 15), |x| {
+  let s = slice(cat, x)
+  {mass: s.girth * (0.9 kg/m ± 10%), cg: s.centroid}           # girth: shell length around
+})
+let tank = trapz(xs, map(xs, |x| slice(cat, x, {below: wl}).area))   # a volume, by slices
+```
+
+- **What's measured:** both work on the triangle mesh hullgeom keeps of each
+  hull. For STL that's the file's own facets; for IGES the patches are
+  tessellated at about 1/400 of the hull's size. A one-sided (half-hull) file
+  is mirrored.
+- **Accuracy:** the facets are flat, so on curved plating the mesh falls short
+  of the surface by roughly (h/R)²/8. On the Graf demihull:
+  - the shell below the waterline is 5.777 m², against hullgeom's wetted surface
+    of 5.794 m² (−0.3%);
+  - 131 slices integrated along x give 0.7476 m³, against its displaced volume
+    of 0.7505 m³ (−0.4%).
+
+  On flat-sided shapes (a box) and the Wigley form, areas, centroids and girths
+  are exact.
+- **Open sections:** a section without a deck is closed straight across its
+  top, as hullgeom's GZ does. `girth` counts only the shell, not that closing
+  line or the cut at `below`.
+- **Uncertain bounds:** region bounds, a station or a `below` height may be
+  uncertain. They go through the same grid as `float`, and the held-out check
+  ignores errors within the mesh's own 0.3%.
+- **`outlines`:** each closed loop as `[x, y, z]` points, ready for napkin's
+  `area`, `centroid` and `section`. Given only when the station is certain.
 
 ### Frames
 
@@ -84,6 +133,9 @@ solved once per sample. Instead they are solved on a grid and interpolated
 ## Tests
 
 `tests/hulls.rs` checks against:
+- **Shell and slices:** a box's shell and slices exactly, the Wigley form's
+  section areas and centroids, and the Graf demihull's slices and shell against
+  hullgeom's volume and wetted surface.
 - **The Wigley float:** V = 4/9·LBT.
 - **A box barge's wall-sided GZ curve and list angle:** the box is written as
   STL by the test. hullgeom's ray sectioning is good to about 1% of volume and

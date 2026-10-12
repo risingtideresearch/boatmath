@@ -180,9 +180,12 @@ impl UnitExpr {
                 None => out.push((n.clone(), *e, d)),
             }
         }
+        // Scale-only units (%, deg, rad) say nothing once multiplied into a
+        // dimensioned quantity: 12% × 5 kg is 0.6 kg, not 60 %·kg.
+        let dimensioned = out.iter().any(|(_, e, d)| d.is_some() && !e.is_zero());
         UnitExpr(
             out.into_iter()
-                .filter(|(_, e, _)| !e.is_zero())
+                .filter(|(_, e, d)| !e.is_zero() && (d.is_some() || !dimensioned))
                 .map(|(n, e, _)| (n, e))
                 .collect(),
         )

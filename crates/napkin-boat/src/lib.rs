@@ -5,6 +5,7 @@
 //! carry a napkin weight study's uncertain mass and CG through the free-trim
 //! float and the GZ curve (see [`surrogate`] for how that stays cheap).
 
+pub mod geometry;
 pub mod hull;
 pub mod surrogate;
 

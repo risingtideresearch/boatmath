@@ -29,7 +29,8 @@ impl Axis {
                     (a.min(x), b.max(x))
                 }),
         };
-        if hi - lo <= 1e-12 * hi.abs().max(1.0) || n < 2 {
+        // (NaN compares false, so an input of NaN is a single node too.)
+        if !(hi - lo > 1e-12 * hi.abs().max(1.0)) || n < 2 {
             return Axis {
                 nodes: vec![0.5 * (lo + hi)],
                 weights: vec![1.0],
@@ -106,11 +107,14 @@ pub struct Result {
 /// Evaluate `f(point) -> outputs` over the uncertain `inputs`, `nodes` per axis.
 /// Outputs listed in `kinked` (the transom immersing, a deck edge going under)
 /// are interpolated piecewise-linearly, which can't ring across a kink; the
-/// rest by polynomial. The held-out check covers the smooth outputs.
+/// rest by polynomial. The held-out check covers the smooth outputs: an
+/// error counts against an output's spread over the grid, unless it is within
+/// the solver's own relative `accuracy`.
 pub fn evaluate(
     inputs: &[&Samples],
     nodes: &[usize],
     kinked: &[usize],
+    accuracy: f64,
     f: impl Fn(&[f64]) -> std::result::Result<Vec<f64>, String> + Sync,
 ) -> std::result::Result<Result, String> {
     let axes: Vec<Axis> = inputs
@@ -218,7 +222,12 @@ pub fn evaluate(
         let exact = f(&p)?;
         for &o in &smooth {
             if exact[o].is_finite() && cols[o][i].is_finite() {
-                worst = worst.max((exact[o] - cols[o][i]).abs() / spread[o]);
+                // An error within the solver's own accuracy isn't the
+                // interpolation's to fix, however small the spread.
+                let err = (exact[o] - cols[o][i]).abs();
+                if err > accuracy * exact[o].abs() {
+                    worst = worst.max(err / spread[o]);
+                }
             }
         }
     }
