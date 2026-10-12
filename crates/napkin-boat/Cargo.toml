@@ -1,0 +1,13 @@
+[package]
+name = "napkin-boat"
+version = "0.1.0"
+edition = "2021"
+description = "napkin with boatmath's hulls: floating, stability and weights with uncertainty"
+
+[[bin]]
+name = "napkin"
+path = "src/main.rs"
+
+[dependencies]
+napkin = { path = "../napkin" }
+hullgeom = { path = "../hullgeom" }

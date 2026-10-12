@@ -389,6 +389,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "napkin"
+version = "0.1.0"
+
+[[package]]
+name = "napkin-boat"
+version = "0.1.0"
+dependencies = [
+ "hullgeom",
+ "napkin",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,42 @@
+# A weight study for the Graf catamaran, carried through its float and its GZ curve.
+#
+#   cargo run --release -p napkin-boat -- crates/napkin-boat/examples/graf_weights.nap
+#
+# The demihull (graf-demihull.igs) lives at the repository root, outside git.
+# Coordinates are the IGES file's: x along the hull (bow toward +x), z up from
+# the file's origin, y from the platform's centreline.
+
+let cat = hull("graf-demihull.igs", {span: 1.6 m})
+hydrostatics(cat)
+
+# ---- Weights ------------------------------------------------------------------
+let items = [
+  {name: "Hulls + beams", mass: 620 kg ± 6%,        cg: [2.75, 0, 0.18 ± 0.03] m},
+  {name: "Motors",        mass: 2 * (85 kg ± 2%),   cg: [0.6, 0, 0.05] m},
+  {name: "Battery",       mass: 310 to 360 kg,      cg: [2.4 ± 0.1, 0, -0.05] m},
+  {name: "Deck + cabin",  mass: 240 to 320 kg,      cg: [3.0 ± 0.15, 0, 0.75 ± 0.08] m},
+  # Four crew, anywhere from the helm to the foredeck, either side.
+  {name: "Crew",          mass: 4 * (80 kg ± 12 kg), cg: [2.2 ± 0.4, 0.1 ± 0.2, 0.9] m},
+]
+weight_table(items)
+let ship = combine(items)
+
+# ---- Floating -------------------------------------------------------------------
+let f = float(cat, ship)
+f.trim            # + is bow up
+f.sinkage -> mm   # below the design waterline
+sensitivity(f.trim)
+
+# ---- Stability ------------------------------------------------------------------
+let s = stability(cat, ship)
+s.gm
+s.list
+s.max_gz
+s.vanishing
+s.area_30
+
+# How likely is each threshold to be missed?
+P(s.area_30 < 0.055 m·rad)
+P(s.max_gz < 0.2 m)
+P(s.vanishing < 65 deg)
+sensitivity(s.max_gz)

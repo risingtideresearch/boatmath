@@ -27,6 +27,8 @@ boatmath hull e12.igs --waterline -0.95 \
 | `boatmath` | what the CLI and the web app share: hulls, cases and studies; the calm-water and wave computations on a platform; native JSON geometry; camber documents (`boatmath::camber`); drives on mounts; CAD export | all of the above |
 | `boatmath-cli` | the `boatmath` command: Unix-style tools on JSON-lines streams | `boatmath`, `propeller` |
 | `boatmath-web` | the browser front end, a store and a queue of studies | `boatmath` |
+| `napkin` | a small language for calculations with units and uncertainty (Monte Carlo samples that keep their correlations): weight groups, CGs, section properties, sensitivity | — |
+| `napkin-boat` | the `napkin` command: napkin with hulls from `hullgeom`, so a weight study's uncertain mass and CG run through the free-trim float and the GZ curve | `napkin`, `hullgeom` |
 
 The geometry crate knows no flow theory. `thinship` gives the equilibrium
 solver its speed-dependent load through `float::DynamicModel`

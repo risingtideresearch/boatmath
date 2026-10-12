@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/hullgeom", "crates/thinship", "crates/seakeeping", "crates/propeller", "crates/boatmath", "crates/boatmath-web", "crates/boatmath-cli"]
+members = ["crates/hullgeom", "crates/thinship", "crates/seakeeping", "crates/propeller", "crates/boatmath", "crates/boatmath-web", "crates/boatmath-cli", "crates/napkin", "crates/napkin-boat"]
 resolver = "2"
 
 [profile.release]
