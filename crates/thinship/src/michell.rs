@@ -72,11 +72,12 @@ pub enum TransomClosure {
     ///
     /// Behind a dry transom the hollow is part of the hull's own wave, so
     /// its length scales with the wave rather than with `d_T`. The ballistic
-    /// length there is a small fraction of a wavelength, and a hollow that
-    /// short closes almost as abruptly as the bare step: compared with
-    /// STAR-CCM+ on a catamaran with a dry transom (Fn_T ≈ 4, Fn 0.56), it
-    /// overstated `R_w` by about 60%, while any hollow from half a wavelength up
-    /// came within ±6% of the infinite one, and of the CFD.
+    /// length there is a small fraction of a wavelength (0.95 m against 17 m
+    /// on a catamaran at Fn 0.56, Fn_T ≈ 4), and a hollow that short closes
+    /// almost as abruptly as the bare step: there it gave `R_w` 1.6× the
+    /// infinite hollow's, while any hollow from half a wavelength up came
+    /// within ±6% of it. This is an argument, not yet a validation: no CFD or
+    /// tank result with the transom immersed has been compared.
     Auto { coeff: f64, fraction: f64 },
     /// Hollow of a prescribed length [m], independent of speed.
     ///
