@@ -205,12 +205,17 @@ enum Command {
         /// Hold the attitude at rest instead of floating at speed.
         #[arg(long)]
         hold: bool,
-        /// Transom closure: ballistic[:COEFF], fixed:LENGTH, or off.
+        /// Transom closure: auto[:FRACTION] (the default), ballistic[:COEFF],
+        /// fixed:LENGTH, or off.
         #[arg(long)]
         closure: Option<String>,
         /// Free-surface grid columns (calm water).
         #[arg(long)]
         grid: Option<usize>,
+        /// How far astern the free surface reaches, in lengths (calm water;
+        /// default 1.5).
+        #[arg(long)]
+        astern: Option<f64>,
         /// In waves from these headings [deg, 180 head seas]; a LIST.
         #[arg(long, allow_hyphen_values = true)]
         waves: Option<String>,
@@ -697,11 +702,19 @@ fn closure(s: &str) -> Result<Closure, String> {
         "ballistic" => Closure::Ballistic {
             coeff: Some(num(arg)?),
         },
+        "auto" if arg.is_empty() => Closure::Auto {
+            coeff: None,
+            fraction: None,
+        },
+        "auto" => Closure::Auto {
+            coeff: None,
+            fraction: Some(num(arg)?),
+        },
         "fixed" => Closure::Fixed { length: num(arg)? },
         "off" => Closure::Off,
         _ => {
             return Err(format!(
-                "--closure {s:?}: expected ballistic[:COEFF], fixed:LENGTH or off"
+                "--closure {s:?}: expected auto[:FRACTION], ballistic[:COEFF], fixed:LENGTH or off"
             ))
         }
     })
@@ -968,6 +981,7 @@ fn go(cli: Cli) -> Result<usize, String> {
             hold,
             closure: cl,
             grid,
+            astern,
             waves,
             lambdas,
             sea: sea_arg,
@@ -989,6 +1003,7 @@ fn go(cli: Cli) -> Result<usize, String> {
                         dynamic: !hold,
                         closure,
                         grid: grid.unwrap_or_else(boatmath::params::default_grid),
+                        astern,
                         waves: v[0].map(|heading| Waves {
                             heading,
                             lambdas: lambdas.clone(),

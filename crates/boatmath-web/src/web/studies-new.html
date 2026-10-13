@@ -99,19 +99,20 @@
     <div class="fields" style="margin-top:8px">
       <label>Transom closure
         <select id="closure">
+          <option value="auto">ballistic when wet, ½ wavelength when dry</option>
           <option value="ballistic">ballistic hollow</option>
           <option value="fixed">fixed hollow length</option>
           <option value="off">none</option>
         </select>
       </label>
-      <label id="paramlabel">Coefficient
-        <input id="param" type="number" step="any" placeholder="√2">
+      <label id="paramlabel">Dry hollow [wavelengths]
+        <input id="param" type="number" step="any" placeholder="0.5">
       </label>
       <label class="wide">Free-surface grid columns
         <input id="grid" type="number" min="40" max="1200" placeholder="640">
       </label>
     </div>
-    <p class="hint">The ballistic hollow is L<sub>v</sub> = c·U·√(d<sub>T</sub>/g), c = √2 by default. The grid sets the calm-water wave pattern's resolution only; resistance and attitude do not depend on it.</p>
+    <p class="hint">The ballistic hollow is L<sub>v</sub> = c·U·√(d<sub>T</sub>/g), c = √2 by default. The default closure uses it while the transom is wet and a fraction of the transverse wavelength 2πU²/g once it runs dry, blending between them for transom Froude numbers U/√(g·d<sub>T</sub>) from 2.5 to 3.5. The grid sets the calm-water wave pattern's resolution only; resistance and attitude do not depend on it.</p>
   </details>
 
   <section>
@@ -163,7 +164,8 @@ function planned() {
   const cl = $("closure").value, param = $("param").value.trim();
   if (cl === "fixed") base.closure = { type: "fixed", length: param ? Number(param) : 0.3 };
   else if (cl === "off") base.closure = { type: "off" };
-  else if (param) base.closure = { type: "ballistic", coeff: Number(param) };
+  else if (cl === "ballistic") base.closure = param ? { type: "ballistic", coeff: Number(param) } : { type: "ballistic" };
+  else if (param) base.closure = { type: "auto", fraction: Number(param) };
   const grid = $("grid").value.trim();
   if (grid) base.grid = Number(grid);
   let waves = [];
@@ -253,8 +255,9 @@ $("cases").addEventListener("change", () => { keepAddress(); refresh(); });
 function updateParam() {
   const cl = $("closure").value;
   $("paramlabel").hidden = cl === "off";
-  $("paramlabel").firstChild.textContent = cl === "fixed" ? "Hollow length [m]" : "Coefficient";
-  $("param").placeholder = cl === "fixed" ? "0.3" : "√2";
+  $("paramlabel").firstChild.textContent =
+    cl === "fixed" ? "Hollow length [m]" : cl === "ballistic" ? "Coefficient" : "Dry hollow [wavelengths]";
+  $("param").placeholder = cl === "fixed" ? "0.3" : cl === "ballistic" ? "√2" : "0.5";
 }
 $("closure").addEventListener("change", updateParam);
 

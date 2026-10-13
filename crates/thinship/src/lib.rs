@@ -33,7 +33,8 @@
 //!   port/starboard symmetric about their centreplanes.
 //! - A **transom stern** is closed by a virtual appendage — see
 //!   [`TransomClosure`] — whose hollow length defaults to the ballistic
-//!   estimate; the bow has no such treatment.
+//!   estimate while the transom is wet and half a transverse wavelength once
+//!   it runs dry; the bow has no such treatment.
 //!
 //! ## Example
 //!
@@ -89,9 +90,12 @@ pub use friction::{
 pub use hullgeom::{
     Conditions, Error, Fluid, Placement, Result, SectionalHull, Transom, C64, STANDARD_GRAVITY,
 };
+pub use michell::{
+    TransomClosure, WaveOptions, WaveResistance, AUTO_DRY_FN_T, AUTO_WET_FN_T, BALLISTIC_COEFF,
+    DRY_HOLLOW_FRACTION,
+};
 pub use sectional::SectionalWave;
 pub use spectrum::{FreeWaveSpectrum, WaveGrid};
-pub use michell::{TransomClosure, WaveOptions, WaveResistance, BALLISTIC_COEFF};
 
 /// Combined resistance breakdown for a multihull.
 #[derive(Debug, Clone)]

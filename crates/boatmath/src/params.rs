@@ -17,7 +17,7 @@
 use crate::MassBy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use thinship::TransomClosure;
+use thinship::{TransomClosure, BALLISTIC_COEFF, DRY_HOLLOW_FRACTION};
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -134,6 +134,14 @@ pub enum Closure {
         #[serde(default)]
         coeff: Option<f64>,
     },
+    /// The free-fall hollow while the transom is wet, `fraction` of a
+    /// transverse wavelength once it runs dry; both default to the solver's.
+    Auto {
+        #[serde(default)]
+        coeff: Option<f64>,
+        #[serde(default)]
+        fraction: Option<f64>,
+    },
     /// A hollow of fixed length [m].
     Fixed {
         length: f64,
@@ -143,31 +151,41 @@ pub enum Closure {
 
 impl Default for Closure {
     fn default() -> Self {
-        Closure::Ballistic { coeff: None }
+        Closure::Auto {
+            coeff: None,
+            fraction: None,
+        }
     }
 }
 
 impl Closure {
     pub fn transom(self) -> TransomClosure {
         match self {
-            Closure::Ballistic { coeff: Some(c) } => TransomClosure::Ballistic { coeff: c },
-            Closure::Ballistic { coeff: None } => TransomClosure::default(),
+            Closure::Ballistic { coeff } => TransomClosure::Ballistic {
+                coeff: coeff.unwrap_or(BALLISTIC_COEFF),
+            },
+            Closure::Auto { coeff, fraction } => TransomClosure::Auto {
+                coeff: coeff.unwrap_or(BALLISTIC_COEFF),
+                fraction: fraction.unwrap_or(DRY_HOLLOW_FRACTION),
+            },
             Closure::Fixed { length } => TransomClosure::Fixed { length },
             Closure::Off => TransomClosure::None,
         }
     }
 
     fn canonical(self) -> Result<Closure, String> {
+        let or = |v: Option<f64>, default: f64, what: &str| match v {
+            Some(c) if c.is_finite() => Ok(c.max(0.0)),
+            Some(c) => Err(format!("closure {what} {c}: not a number")),
+            None => Ok(default),
+        };
         Ok(match self {
             Closure::Ballistic { coeff } => Closure::Ballistic {
-                coeff: Some(match coeff {
-                    Some(c) if c.is_finite() => c.max(0.0),
-                    Some(c) => return Err(format!("closure coeff {c}: not a number")),
-                    None => match TransomClosure::default() {
-                        TransomClosure::Ballistic { coeff } => coeff,
-                        _ => unreachable!("the default closure is ballistic"),
-                    },
-                }),
+                coeff: Some(or(coeff, BALLISTIC_COEFF, "coeff")?),
+            },
+            Closure::Auto { coeff, fraction } => Closure::Auto {
+                coeff: Some(or(coeff, BALLISTIC_COEFF, "coeff")?),
+                fraction: Some(or(fraction, DRY_HOLLOW_FRACTION, "fraction")?),
             },
             Closure::Fixed { length } if length.is_finite() => Closure::Fixed {
                 length: length.max(0.0),
@@ -265,6 +283,10 @@ pub struct StudyParams {
     /// Free-surface grid columns (a calm-water study's field; display only).
     #[serde(default = "default_grid")]
     pub grid: usize,
+    /// How far astern the field reaches, in lengths behind the sterns
+    /// (`None`: 1.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub astern: Option<f64>,
     /// In waves; `None` in calm water.
     #[serde(default)]
     pub waves: Option<Waves>,
@@ -296,8 +318,14 @@ impl StudyParams {
         }
         self.closure = self.closure.canonical()?;
         self.grid = self.grid.clamp(40, 1200);
+        if let Some(a) = self.astern {
+            if !(a > 0.0 && a <= 20.0) {
+                return Err(format!("astern {a}: expected 0 < lengths ≤ 20"));
+            }
+        }
         if let Some(w) = &mut self.waves {
             self.grid = default_grid();
+            self.astern = None;
             if !w.heading.is_finite() {
                 return Err("heading: not a number".into());
             }
@@ -330,6 +358,7 @@ impl StudyParams {
         StudyParams {
             waves: None,
             grid,
+            astern: None,
             ..self.clone()
         }
     }
@@ -369,11 +398,18 @@ mod tests {
     #[test]
     fn equal_requests_hash_alike() {
         let a = study(r#"{"froude": 0.3}"#);
-        let b = study(
-            r#"{"froude": 0.3, "grid": 640, "dynamic": true, "closure": {"type": "ballistic"}}"#,
-        );
+        let b =
+            study(r#"{"froude": 0.3, "grid": 640, "dynamic": true, "closure": {"type": "auto"}}"#);
         assert_eq!(a.hash(), b.hash());
         assert_ne!(a.hash(), study(r#"{"froude": 0.31}"#).hash());
+        let ballistic = study(r#"{"froude": 0.3, "closure": {"type": "ballistic"}}"#);
+        assert_ne!(
+            a.hash(),
+            ballistic.hash(),
+            "a stored ballistic study stays ballistic"
+        );
+        assert_eq!(a.hash(), study(r#"{"froude": 0.3, "astern": null}"#).hash());
+        assert_ne!(a.hash(), study(r#"{"froude": 0.3, "astern": 4}"#).hash());
         let w = study(r#"{"froude": 0.3, "grid": 200, "waves": {"heading": -180}}"#);
         assert_eq!(w.kind(), "waves");
         assert_eq!(w.grid, 640, "a study in waves has no grid of its own");
