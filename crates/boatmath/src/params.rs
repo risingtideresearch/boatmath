@@ -290,6 +290,16 @@ pub struct StudyParams {
     /// In waves; `None` in calm water.
     #[serde(default)]
     pub waves: Option<Waves>,
+    /// The hulls' form factor `k`, as `(1 + k)·C_F` (`None`: 0, the flat
+    /// plate). A drive's parts keep their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form_factor: Option<f64>,
+    /// Roughness allowance `ΔC_F`, on every wetted part (`None`: smooth).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f64>,
+    /// Charge a transom running dry the hydrostatic thrust it loses.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transom_drag: bool,
 }
 
 pub fn default_grid() -> usize {
@@ -318,6 +328,18 @@ impl StudyParams {
         }
         self.closure = self.closure.canonical()?;
         self.grid = self.grid.clamp(40, 1200);
+        // A zero is the default: dropped, so the study is the one without it.
+        for (name, v, hi) in [
+            ("form factor", &mut self.form_factor, 2.0),
+            ("roughness", &mut self.roughness, 0.01),
+        ] {
+            if let Some(x) = *v {
+                if !(0.0..=hi).contains(&x) {
+                    return Err(format!("{name} {x}: expected 0 to {hi}"));
+                }
+                *v = Some(x).filter(|&x| x > 0.0);
+            }
+        }
         if let Some(a) = self.astern {
             if !(a > 0.0 && a <= 20.0) {
                 return Err(format!("astern {a}: expected 0 < lengths ≤ 20"));

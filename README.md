@@ -60,8 +60,10 @@ on the sectional hull's transforms without going through `thinship`.
   results carry that uncertainty.
   Thin-ship theory overstates `C_W` on full hulls.
 - **Viscous resistance** is the ITTC-57 line on each hull's wetted area,
-  times a form factor, plus a roughness allowance. Neither is derived from
-  the hull. Don't back the form factor out of a measured `C_T` using this
+  times a form factor, plus a roughness allowance, both 0 unless a study
+  sets them. Neither is derived from the hull.
+- **A dry transom's drag** (the hydrostatic thrust it loses) is outside
+  thin-ship theory; `study --transom-drag` adds it. Don't back the form factor out of a measured `C_T` using this
   `C_W`: the fit would absorb thin-ship theory's error.
 - **Seakeeping** is strip theory: trust heave; treat pitch at speed and
   added resistance near resonance as indicative (see the findings doc).

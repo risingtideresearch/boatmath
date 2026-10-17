@@ -449,16 +449,21 @@ fn detect_transom(
         }
     }
 
-    // Area: exact per z-span (polynomial of degree q), both sides.
+    // Area and its first moment: exact per z-span (polynomials of degree q
+    // and q + 1), both sides.
     let (zn, zw) = gauss_legendre(q / 2 + 2);
-    let mut area = 0.0;
+    let (mut area, mut depth_moment) = (0.0, 0.0);
     for sz in spans_z {
         let jac = sz.len / 2.0;
         for (j, &zj) in zn.iter().enumerate() {
-            area += zw[j] * jac * surface.eval(x_t, zj_map(sz, zj));
+            let z = zj_map(sz, zj);
+            let f = zw[j] * jac * surface.eval(x_t, z);
+            area += f;
+            depth_moment += f * z;
         }
     }
     area *= 2.0;
+    depth_moment *= 2.0;
     if !(area > TRANSOM_AREA_REL * max_section_area) {
         return None;
     }
@@ -481,6 +486,7 @@ fn detect_transom(
             x: x_t,
             depth,
             area,
+            depth_moment,
             half_beam: surface.eval(x_t, 0.0),
         },
         coeff,

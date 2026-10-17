@@ -927,13 +927,14 @@ pub fn flow_with_progress(
     )?;
     let t_field = t0.elapsed().as_secs_f64() - t_attitude;
 
-    let res = thinship::sectional::multihull_resistance(
-        &members,
-        &cond,
-        &wave,
-        &thinship::ViscousOptions::default(),
-    )
-    .map_err(|e| e.to_string())?;
+    let viscous = thinship::ViscousOptions {
+        form_factor: study.form_factor.unwrap_or(0.0),
+        roughness: study
+            .roughness
+            .map_or(thinship::Roughness::None, thinship::Roughness::DeltaCf),
+    };
+    let res = thinship::sectional::multihull_resistance(&members, &cond, &wave, &viscous)
+        .map_err(|e| e.to_string())?;
 
     // Forces: the solved balance, or at a held attitude the dynamic load
     // there, unbalanced (how far the attitude is from its own equilibrium at
@@ -1014,8 +1015,8 @@ pub fn flow_with_progress(
     // members are, but at their own form factors (Hoerner's, for a foil and
     // for a body of revolution) rather than the hull's; an inclined shaft
     // adds the drag of the flow across it, at its angle to the flow (its
-    // own plus the trim).
-    let k_hull = thinship::ViscousOptions::default().form_factor;
+    // own plus the trim). The roughness allowance is the skin's, so every
+    // part carries it.
     let (mut rv, mut r_app) = (0.0, 0.0);
     let parts_known = res.viscous.len() == s.roles.len();
     let q = 0.5 * rho * cond.speed * cond.speed;
@@ -1025,14 +1026,31 @@ pub fn flow_with_progress(
                 let cross = s.cross.get(k).copied().flatten().map_or(0.0, |c| {
                     q * c.area * c.cd * (c.angle + platform.trim).sin().abs().powi(3)
                 });
-                let r = v.resistance * (1.0 + kp) / (1.0 + k_hull) + cross;
+                let r = ((1.0 + kp) * v.cf + v.roughness_cf) * q * v.wetted_surface + cross;
                 rv += r;
                 r_app += r;
             }
             _ => rv += v.resistance,
         }
     }
-    let rt = res.wave.resistance + rv;
+    // A transom running dry: the water no longer closes in behind it, so the
+    // hull loses the hydrostatic thrust ρg∫∫z dA the transom's face would
+    // carry — faded in across the closure's own wet-to-dry band of Fn_T.
+    // Thin-ship theory has no term for it, closure or not.
+    let r_transom: f64 = if study.transom_drag {
+        members
+            .iter()
+            .filter_map(|(h, _)| h.transom())
+            .filter(|t| t.depth > 0.0)
+            .map(|t| {
+                let fn_t = cond.speed / (cond.gravity * t.depth).sqrt();
+                rho * cond.gravity * t.depth_moment * thinship::transom_dryness(fn_t)
+            })
+            .sum()
+    } else {
+        0.0
+    };
+    let rt = res.wave.resistance + rv + r_transom;
     let q_s = 0.5
         * rho
         * cond.speed
@@ -1041,6 +1059,9 @@ pub fn flow_with_progress(
     let mut forces = forces;
     if s.roles.iter().any(|r| r.0 != "hull") {
         forces["r_appendages_viscous"] = json!(r_app);
+    }
+    if study.transom_drag {
+        forces["r_transom"] = json!(r_transom);
     }
     for (k, v) in [
         ("rw", res.wave.resistance),

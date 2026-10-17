@@ -1202,6 +1202,23 @@ mod transom_tests {
         Hull::new(surface).unwrap()
     }
 
+    /// The harness's transom is `f_T = 0.3(1 − t)² + 0.54 t(1 − t)` at
+    /// `z = 0.5t`: its first moment, both sides, is `2 · 0.25 · (0.3/12 +
+    /// 0.27/6) = 0.035 m³`. And the dryness the transom drag fades in with
+    /// runs from wet to dry across the closure's band.
+    #[test]
+    fn the_transom_carries_its_hydrostatic_moment() {
+        let hull = transom_hull();
+        let t = hull.transom().expect("a wet transom");
+        assert!((t.depth_moment - 0.035).abs() < 1e-12, "{}", t.depth_moment);
+        let sec = SectionalHull::from_hull(&hull, &DepthQuadrature::default()).unwrap();
+        assert_eq!(sec.transom().map(|t| t.depth_moment), Some(t.depth_moment));
+        use crate::michell::{transom_dryness, AUTO_DRY_FN_T, AUTO_WET_FN_T};
+        assert_eq!(transom_dryness(AUTO_WET_FN_T), 0.0);
+        assert_eq!(transom_dryness(AUTO_DRY_FN_T), 1.0);
+        assert_eq!(transom_dryness(0.5 * (AUTO_WET_FN_T + AUTO_DRY_FN_T)), 0.5);
+    }
+
     fn closures() -> [TransomClosure; 3] {
         [
             TransomClosure::default(),

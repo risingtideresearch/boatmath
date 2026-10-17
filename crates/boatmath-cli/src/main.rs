@@ -216,6 +216,17 @@ enum Command {
         /// default 1.5).
         #[arg(long)]
         astern: Option<f64>,
+        /// The hulls' form factor k, friction as (1 + k)·C_F (default 0, the
+        /// flat plate; a drive's parts keep their own).
+        #[arg(long)]
+        form_factor: Option<f64>,
+        /// Roughness allowance ΔC_F on every wetted part (default 0).
+        #[arg(long)]
+        roughness: Option<f64>,
+        /// Charge a transom running dry the hydrostatic thrust it loses,
+        /// ρg∫∫z dA, faded in with the transom Froude number.
+        #[arg(long)]
+        transom_drag: bool,
         /// In waves from these headings [deg, 180 head seas]; a LIST.
         #[arg(long, allow_hyphen_values = true)]
         waves: Option<String>,
@@ -982,6 +993,9 @@ fn go(cli: Cli) -> Result<usize, String> {
             closure: cl,
             grid,
             astern,
+            form_factor,
+            roughness,
+            transom_drag,
             waves,
             lambdas,
             sea: sea_arg,
@@ -1009,6 +1023,9 @@ fn go(cli: Cli) -> Result<usize, String> {
                             lambdas: lambdas.clone(),
                             sea,
                         }),
+                        form_factor,
+                        roughness,
+                        transom_drag,
                     };
                     out.emit(&records::study(c, params)?)?;
                 }

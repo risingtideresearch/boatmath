@@ -322,7 +322,7 @@ See [Propellers and motors](#propellers-and-motors).
 | `mount (--stock NAME \| --kind K …)` | case* → + case* | the propulsion drive each case carries: its leg, pod or shaft and strut, and where its propeller sits |
 | `mounts` | → stock_mount* | the stock mounts `mount --stock` knows |
 | `statics` | hull*/case* → + statics*, sections* | each hull's hydrostatics, each case's float at rest and stability (and, for a case, its sections at rest) |
-| `study --froude LIST [--hold] [--closure C] [--grid N] [--astern L] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
+| `study --froude LIST [--hold] [--closure C] [--grid N] [--astern L] [--form-factor K] [--roughness DCF] [--transom-drag] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
 | `run [-j N] [-q]` | study* → + result*, field*, sections* | compute each study |
 | `prop [--d-max L --wake --thrust-deduction --blades LIST --keller-k --top-froude F …]` | result* → + prop* | the best B-series propeller for each result's speed and thrust, on its case's drive |
 | `prop --thrust T --speed V --d-max L --depth D [--shafts N] …` | → prop | the same, for a thrust and speed given outright |
@@ -365,6 +365,15 @@ infinitely long hollow. `--astern L` takes a calm-water study's free surface
 `L` lengths behind the sterns (default 1.5) for a wider `wake` picture; it
 changes nothing else. `--sea` is
 `bretschneider:hs=H,tp=T` or `jonswap:hs=H,tp=T[,gamma=G]`.
+
+The hulls' friction is the ITTC-57 line on their wetted area, as a flat
+plate unless `--form-factor K` makes it `(1 + K)·C_F`; `--roughness DCF`
+adds `ΔC_F` outside that, on the drive's parts too (which keep their own
+form factors). `--transom-drag` charges a transom the hydrostatic thrust it
+loses once it runs dry, `ρg∫∫z dA` over its immersed face at the attitude,
+faded in across the same transom Froude numbers as `auto` (2.5 to 3.5); it
+is `forces.r_transom`, inside `forces.rt`. Thin-ship theory has no term for
+it with any closure. All three are off by default.
 
 `run` needs no statics: a study held at rest (`--hold`) has its case's
 attitude at rest found as part of the run. It first computes the calm-water

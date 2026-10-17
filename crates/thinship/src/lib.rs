@@ -91,8 +91,8 @@ pub use hullgeom::{
     Conditions, Error, Fluid, Placement, Result, SectionalHull, Transom, C64, STANDARD_GRAVITY,
 };
 pub use michell::{
-    TransomClosure, WaveOptions, WaveResistance, AUTO_DRY_FN_T, AUTO_WET_FN_T, BALLISTIC_COEFF,
-    DRY_HOLLOW_FRACTION,
+    transom_dryness, TransomClosure, WaveOptions, WaveResistance, AUTO_DRY_FN_T, AUTO_WET_FN_T,
+    BALLISTIC_COEFF, DRY_HOLLOW_FRACTION,
 };
 pub use sectional::SectionalWave;
 pub use spectrum::{FreeWaveSpectrum, WaveGrid};
