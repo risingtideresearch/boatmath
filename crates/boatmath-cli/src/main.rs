@@ -227,6 +227,10 @@ enum Command {
         /// ρg∫∫z dA, faded in with the transom Froude number.
         #[arg(long)]
         transom_drag: bool,
+        /// The hulls' dynamic lift, in the attitude and the waves: 2dt
+        /// (slender-body 2D+t on the sections at the attitude).
+        #[arg(long)]
+        lift: Option<String>,
         /// In waves from these headings [deg, 180 head seas]; a LIST.
         #[arg(long, allow_hyphen_values = true)]
         waves: Option<String>,
@@ -996,10 +1000,16 @@ fn go(cli: Cli) -> Result<usize, String> {
             form_factor,
             roughness,
             transom_drag,
+            lift,
             waves,
             lambdas,
             sea: sea_arg,
         } => {
+            let lift = match lift.as_deref() {
+                None => None,
+                Some("2dt") => Some(boatmath::params::LiftModel::TwoDT),
+                Some(other) => return Err(format!("--lift {other}: expected 2dt")),
+            };
             let froudes = list::parse(&froude).map_err(|e| format!("--froude: {e}"))?;
             let closure = cl.as_deref().map(closure).transpose()?.unwrap_or_default();
             let lambdas = list(&lambdas, "lambdas")?;
@@ -1026,6 +1036,7 @@ fn go(cli: Cli) -> Result<usize, String> {
                         form_factor,
                         roughness,
                         transom_drag,
+                        lift,
                     };
                     out.emit(&records::study(c, params)?)?;
                 }

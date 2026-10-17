@@ -300,6 +300,18 @@ pub struct StudyParams {
     /// Charge a transom running dry the hydrostatic thrust it loses.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub transom_drag: bool,
+    /// The hulls' dynamic lift beside thin-ship theory's thickness, in the
+    /// attitude and in the waves (`None`: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lift: Option<LiftModel>,
+}
+
+/// How a study's hulls lift (see [`crate::lift`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LiftModel {
+    /// Slender-body 2D+t on the sections at the attitude.
+    #[serde(rename = "2dt")]
+    TwoDT,
 }
 
 pub fn default_grid() -> usize {
@@ -389,12 +401,18 @@ impl StudyParams {
     /// (any grid) and the studies in waves taken about it: its speed, attitude
     /// and closure.
     pub fn attitude_key(&self) -> String {
-        sha(&serde_json::to_string(&(self.froude, self.dynamic, self.closure)).expect("serialize"))
+        let key = (self.froude, self.dynamic, self.closure);
+        sha(&match self.lift {
+            // Without lift, the key it always had.
+            None => serde_json::to_string(&key),
+            Some(lift) => serde_json::to_string(&(key, lift)),
+        }
+        .expect("serialize"))
     }
 
     /// The same study at another speed: what a warm start may borrow from.
     pub fn same_but_speed(&self, other: &StudyParams) -> bool {
-        self.dynamic == other.dynamic && self.closure == other.closure
+        self.dynamic == other.dynamic && self.closure == other.closure && self.lift == other.lift
     }
 }
 

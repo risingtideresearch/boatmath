@@ -75,6 +75,7 @@ mod hull;
 mod hulls;
 mod michell;
 pub mod nearfield;
+pub mod pressure;
 pub mod propulsion;
 pub mod sectional;
 pub mod spectrum;

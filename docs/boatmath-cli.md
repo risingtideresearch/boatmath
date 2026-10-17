@@ -322,7 +322,7 @@ See [Propellers and motors](#propellers-and-motors).
 | `mount (--stock NAME \| --kind K …)` | case* → + case* | the propulsion drive each case carries: its leg, pod or shaft and strut, and where its propeller sits |
 | `mounts` | → stock_mount* | the stock mounts `mount --stock` knows |
 | `statics` | hull*/case* → + statics*, sections* | each hull's hydrostatics, each case's float at rest and stability (and, for a case, its sections at rest) |
-| `study --froude LIST [--hold] [--closure C] [--grid N] [--astern L] [--form-factor K] [--roughness DCF] [--transom-drag] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
+| `study --froude LIST [--hold] [--closure C] [--grid N] [--astern L] [--form-factor K] [--roughness DCF] [--transom-drag] [--lift 2dt] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
 | `run [-j N] [-q]` | study* → + result*, field*, sections* | compute each study |
 | `prop [--d-max L --wake --thrust-deduction --blades LIST --keller-k --top-froude F …]` | result* → + prop* | the best B-series propeller for each result's speed and thrust, on its case's drive |
 | `prop --thrust T --speed V --d-max L --depth D [--shafts N] …` | → prop | the same, for a thrust and speed given outright |
@@ -374,6 +374,19 @@ loses once it runs dry, `ρg∫∫z dA` over its immersed face at the attitude,
 faded in across the same transom Froude numbers as `auto` (2.5 to 3.5); it
 is `forces.r_transom`, inside `forces.rt`. Thin-ship theory has no term for
 it with any closure. All three are off by default.
+
+`--lift 2dt` gives the hulls a dynamic lift beside their thin-ship
+thickness: slender-body 2D+t on the sections at the attitude (each
+section's infinite-frequency added mass, the angle of attack the keel's
+over the run, Garme's transom reduction, cross-flow drag). It enters the
+attitude solve as a force and moment, and the waves as a pressure patch on
+the bottom whose amplitude adds to the hull's in Michell's integral — so
+the lift's own wave drag and its interference with the hull's waves (and
+the other demihull's) are in `forces.rw`; nothing like `L·tan τ` is added
+besides. `forces.lift` is the total, `forces.lift_alpha_deg` the run's
+angle of attack. Against Savitsky's prismatic planing surfaces it is within
+10% at `C_V` 4, `λ` 3–4; it falls short when short and fast (no pile-up)
+and runs ~25% high at `C_V` 2 (no gravity). See `crates/boatmath/src/lift.rs`.
 
 `run` needs no statics: a study held at rest (`--hold`) has its case's
 attitude at rest found as part of the run. It first computes the calm-water

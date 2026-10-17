@@ -18,6 +18,7 @@ use crate::michell::{
     add_transom_step, appendage_source, hollow_shape_moment, run_outer, MemberWave,
     NearFieldKernel, OuterParams, SquatTransforms, TransomClosure, WaveOptions, WaveResistance,
 };
+use crate::pressure::PressurePatch;
 use crate::squat::{integrate_force, DynamicForce, Fleet, Member, SquatOptions};
 use crate::MultihullResistance;
 use hullgeom::float::{DynamicLoad, DynamicModel, FleetState};
@@ -321,11 +322,32 @@ impl NearFieldKernel for SectionalKernel<'_> {
     }
 }
 
+/// A hull's whole free-wave amplitude: its thickness, closed by `closure`,
+/// and the pressure of its lift (see [`crate::pressure`]), if it carries
+/// one; `scale` is `1/(2ρU²)`.
+fn amplitude_lifted(
+    hull: &SectionalHull,
+    patch: Option<&PressurePatch>,
+    nu: f64,
+    lambda: f64,
+    closure: TransomClosure,
+    scale: f64,
+    scratch: &mut SectionalContracted,
+) -> C64 {
+    let f = hull.amplitude_closed(nu, lambda, closure, scratch);
+    match patch {
+        Some(p) => f + p.amplitude(nu, lambda, hull.x_center(), scale),
+        None => f,
+    }
+}
+
 /// The sectional hull as a wave-resistance member, for the shared outer
 /// quadrature, with its placement phase offsets.
 #[derive(Clone)]
 struct SectionalMember<'h> {
     hull: &'h SectionalHull,
+    patch: Option<&'h PressurePatch>,
+    scale: f64,
     scratch: SectionalContracted,
     dx: f64,
     dy: f64,
@@ -334,9 +356,15 @@ struct SectionalMember<'h> {
 
 impl MemberWave for SectionalMember<'_> {
     fn amps(&mut self, nu: f64, lambda: f64) -> (C64, C64) {
-        let f = self
-            .hull
-            .amplitude_closed(nu, lambda, self.closure, &mut self.scratch);
+        let f = amplitude_lifted(
+            self.hull,
+            self.patch,
+            nu,
+            lambda,
+            self.closure,
+            self.scale,
+            &mut self.scratch,
+        );
         (f, f)
     }
     fn offsets(&self) -> (f64, f64) {
@@ -365,7 +393,14 @@ fn cheb(j: usize) -> f64 {
 }
 
 impl AmplitudeTable {
-    fn new(hull: &SectionalHull, nu: f64, closure: TransomClosure, lam_max: f64) -> Self {
+    fn new(
+        hull: &SectionalHull,
+        patch: Option<&PressurePatch>,
+        nu: f64,
+        closure: TransomClosure,
+        scale: f64,
+        lam_max: f64,
+    ) -> Self {
         let lo = 1.0;
         // Panels ~3 radians of the amplitude's own phase wide.
         let h = (3.0 / (nu * 0.5 * hull.length()).max(1e-9)).min(0.5);
@@ -375,7 +410,7 @@ impl AmplitudeTable {
                 (0..NODES)
                     .map(|j| {
                         let lam = lo + h * (p as f64 + 0.5 * (1.0 + cheb(j)));
-                        hull.amplitude_closed(nu, lam, closure, scratch)
+                        amplitude_lifted(hull, patch, nu, lam, closure, scale, scratch)
                     })
                     .collect::<Vec<_>>()
             });
@@ -448,7 +483,19 @@ pub fn multihull_wave_resistance(
     cond: &Conditions,
     opts: &WaveOptions,
 ) -> Result<WaveResistance> {
-    floored_wave_resistance(members, cond, opts, 0.0)
+    floored_wave_resistance(members, &[], cond, opts, 0.0)
+}
+
+/// [`multihull_wave_resistance`] with each member's lift as a pressure
+/// patch beside its thickness (`patches[i]` for member `i`; missing or
+/// `None`: no lift).
+pub fn multihull_wave_resistance_lifted(
+    members: &[(&SectionalHull, Placement)],
+    patches: &[Option<&PressurePatch>],
+    cond: &Conditions,
+    opts: &WaveOptions,
+) -> Result<WaveResistance> {
+    floored_wave_resistance(members, patches, cond, opts, 0.0)
 }
 
 /// [`multihull_wave_resistance`], resolved only to `floor` [N]: the
@@ -458,6 +505,7 @@ pub fn multihull_wave_resistance(
 /// say) otherwise runs to wavelengths far below the theory's reach.
 fn floored_wave_resistance(
     members: &[(&SectionalHull, Placement)],
+    patches: &[Option<&PressurePatch>],
     cond: &Conditions,
     opts: &WaveOptions,
     floor: f64,
@@ -472,15 +520,19 @@ fn floored_wave_resistance(
     let cx_ref = members.iter().map(|(h, p)| h.x_center() + p.x).sum::<f64>() / n;
     let y_ref = members.iter().map(|(_, p)| p.y).sum::<f64>() / n;
     let coeff = 4.0 * cond.fluid.density * g * g / (PI * u * u);
+    let scale = 1.0 / (2.0 * cond.fluid.density * u * u);
+    let patch = |i: usize| patches.get(i).copied().flatten();
     let params = OuterParams {
         nu,
         x_half: members
             .iter()
             .map(|(h, p)| (h.x_center() + p.x - cx_ref).abs() + 0.5 * h.length())
             .fold(0.0, f64::max),
+        // A patch's own width oscillates in θ as a separation would.
         y_half: members
             .iter()
-            .map(|(_, p)| (p.y - y_ref).abs())
+            .enumerate()
+            .map(|(i, (_, p))| (p.y - y_ref).abs() + patch(i).map_or(0.0, |q| q.half_width()))
             .fold(0.0, f64::max),
         t_max: members.iter().map(|(h, _)| h.draft()).fold(0.0, f64::max),
         floor: floor / coeff,
@@ -507,10 +559,21 @@ fn floored_wave_resistance(
                 )
             })
             .collect();
-        let group = floored_wave_resistance(&collapsed, cond, opts, floor)?;
+        let collapsed_patches: Vec<Option<&PressurePatch>> =
+            originals.iter().map(|&i| patch(i)).collect();
+        let group = floored_wave_resistance(&collapsed, &collapsed_patches, cond, opts, floor)?;
         let tables: Vec<AmplitudeTable> = originals
             .iter()
-            .map(|&i| AmplitudeTable::new(members[i].0, nu, opts.transom, 1.1 * group.max_lambda))
+            .map(|&i| {
+                AmplitudeTable::new(
+                    members[i].0,
+                    patch(i),
+                    nu,
+                    opts.transom,
+                    scale,
+                    1.1 * group.max_lambda,
+                )
+            })
             .collect();
         let table_of = |i: usize| {
             let o = tw[i].unwrap_or(i);
@@ -529,8 +592,11 @@ fn floored_wave_resistance(
     }
     let mem = members
         .iter()
-        .map(|(h, p)| SectionalMember {
+        .enumerate()
+        .map(|(i, (h, p))| SectionalMember {
             hull: h,
+            patch: patch(i),
+            scale,
             scratch: SectionalContracted::default(),
             dx: h.x_center() + p.x - cx_ref,
             dy: p.y - y_ref,
@@ -549,7 +615,19 @@ pub fn multihull_resistance(
     wave_opts: &WaveOptions,
     viscous_opts: &ViscousOptions,
 ) -> Result<MultihullResistance> {
-    let wave = multihull_wave_resistance(members, cond, wave_opts)?;
+    multihull_resistance_lifted(members, &[], cond, wave_opts, viscous_opts)
+}
+
+/// [`multihull_resistance`] with each member's lift as a pressure patch
+/// beside its thickness (see [`multihull_wave_resistance_lifted`]).
+pub fn multihull_resistance_lifted(
+    members: &[(&SectionalHull, Placement)],
+    patches: &[Option<&PressurePatch>],
+    cond: &Conditions,
+    wave_opts: &WaveOptions,
+    viscous_opts: &ViscousOptions,
+) -> Result<MultihullResistance> {
+    let wave = floored_wave_resistance(members, patches, cond, wave_opts, 0.0)?;
     // A copy of an earlier member has its resistance alone.
     let tw = twins(members);
     let mut solo: Vec<f64> = Vec::with_capacity(members.len());
@@ -561,7 +639,10 @@ pub fn multihull_resistance(
     for (i, m) in members.iter().enumerate() {
         let r = match tw[i] {
             Some(j) => solo[j],
-            None => floored_wave_resistance(&[*m], cond, wave_opts, floor)?.resistance,
+            None => {
+                let own = [patches.get(i).copied().flatten()];
+                floored_wave_resistance(&[*m], &own, cond, wave_opts, floor)?.resistance
+            }
         };
         solo.push(r);
     }
@@ -1046,6 +1127,8 @@ mod twin_tests {
             .iter()
             .map(|(h, p)| SectionalMember {
                 hull: h,
+                patch: None,
+                scale: 0.0,
                 scratch: SectionalContracted::default(),
                 dx: h.x_center() + p.x - cx_ref,
                 dy: p.y - y_ref,

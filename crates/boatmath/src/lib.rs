@@ -19,6 +19,7 @@ use thinship::{Conditions, Placement, WaveOptions, STANDARD_GRAVITY};
 pub mod cad;
 pub mod camber;
 pub mod files;
+pub mod lift;
 pub mod mount;
 pub mod native;
 pub mod params;
@@ -237,6 +238,44 @@ struct Counted<'a, R> {
     report: R,
     /// A load added to every evaluation: the drives' thrust.
     extra: hullgeom::float::DynamicLoad,
+    /// The hulls' lift, when the study asks for it.
+    lift: Option<Lifting<'a>>,
+}
+
+/// The hulls' 2D+t lift as a load on the platform (see [`lift`]).
+struct Lifting<'a> {
+    cond: &'a Conditions,
+    /// The pitch pivot, in fleet coordinates.
+    x_ref: f64,
+    /// Which members are hulls (the rest, a drive's parts, don't lift).
+    hulls: Vec<bool>,
+}
+
+impl Lifting<'_> {
+    /// Each lifting member's lift at its attitude (`None` for the rest).
+    fn lifts(&self, members: &[(SectionalHull, Placement)]) -> Vec<Option<lift::Lift>> {
+        // A fleet that lost a member (dry) no longer lines up with the
+        // roles: lift them all — a leg or a pod carries next to nothing.
+        let known = members.len() == self.hulls.len();
+        members
+            .iter()
+            .enumerate()
+            .map(|(i, (h, _))| {
+                (!known || self.hulls[i]).then(|| lift::sectional_lift(h, self.cond))
+            })
+            .collect()
+    }
+
+    fn load(&self, members: &[(SectionalHull, Placement)]) -> hullgeom::float::DynamicLoad {
+        let mut d = hullgeom::float::DynamicLoad::default();
+        for (l, (_, p)) in self.lifts(members).iter().zip(members) {
+            if let Some(l) = l {
+                d.force_up += l.patch.force();
+                d.moment_bow_up += l.patch.moment_bow_up(self.x_ref - p.x);
+            }
+        }
+        d
+    }
 }
 
 impl<R> hullgeom::float::DynamicModel<SectionalHull> for Counted<'_, R>
@@ -250,6 +289,11 @@ where
         let mut d = self.inner.load(fleet)?;
         d.force_up += self.extra.force_up;
         d.moment_bow_up += self.extra.moment_bow_up;
+        if let Some(l) = &self.lift {
+            let ld = l.load(&fleet.members);
+            d.force_up += ld.force_up;
+            d.moment_bow_up += ld.moment_bow_up;
+        }
         let vol: f64 = fleet
             .members
             .iter()
@@ -263,7 +307,12 @@ where
         &mut self,
         fleet: &hullgeom::float::FleetState<SectionalHull>,
     ) -> Option<thinship::Result<hullgeom::float::DynamicLoad>> {
-        let extra = self.extra;
+        let mut extra = self.extra;
+        if let Some(l) = &self.lift {
+            let ld = l.load(&fleet.members);
+            extra.force_up += ld.force_up;
+            extra.moment_bow_up += ld.moment_bow_up;
+        }
         self.inner.probe(fleet).map(|r| {
             r.map(|mut d| {
                 d.force_up += extra.force_up;
@@ -769,6 +818,11 @@ pub fn flow_with_progress(
             inner,
             report,
             extra,
+            lift: study.lift.map(|_| Lifting {
+                cond: &cond,
+                x_ref: lcg,
+                hulls: s.roles.iter().map(|r| r.0 == "hull").collect(),
+            }),
         };
         let eq = solve_equilibrium_sectional_dynamic(
             &sources,
@@ -933,8 +987,23 @@ pub fn flow_with_progress(
             .roughness
             .map_or(thinship::Roughness::None, thinship::Roughness::DeltaCf),
     };
-    let res = thinship::sectional::multihull_resistance(&members, &cond, &wave, &viscous)
-        .map_err(|e| e.to_string())?;
+    // The hulls' lift at the attitude, as pressure in the waves beside
+    // their thickness.
+    let lifts: Vec<Option<lift::Lift>> = match study.lift {
+        Some(_) => Lifting {
+            cond: &cond,
+            x_ref: lcg,
+            hulls: s.roles.iter().map(|r| r.0 == "hull").collect(),
+        }
+        .lifts(&at_attitude),
+        None => Vec::new(),
+    };
+    let patches: Vec<Option<&thinship::pressure::PressurePatch>> =
+        lifts.iter().map(|l| l.as_ref().map(|l| &l.patch)).collect();
+    let res = thinship::sectional::multihull_resistance_lifted(
+        &members, &patches, &cond, &wave, &viscous,
+    )
+    .map_err(|e| e.to_string())?;
 
     // Forces: the solved balance, or at a held attitude the dynamic load
     // there, unbalanced (how far the attitude is from its own equilibrium at
@@ -1062,6 +1131,13 @@ pub fn flow_with_progress(
     }
     if study.transom_drag {
         forces["r_transom"] = json!(r_transom);
+    }
+    if study.lift.is_some() {
+        let lifting: Vec<&lift::Lift> = lifts.iter().flatten().collect();
+        forces["lift"] = json!(lifting.iter().map(|l| l.patch.force()).sum::<f64>());
+        forces["lift_alpha_deg"] = json!(
+            lifting.iter().map(|l| l.alpha.to_degrees()).sum::<f64>() / lifting.len().max(1) as f64
+        );
     }
     for (k, v) in [
         ("rw", res.wave.resistance),
