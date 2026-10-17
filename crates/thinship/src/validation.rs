@@ -794,9 +794,12 @@ mod transom {
         for u in [2.0, 4.0, 8.0] {
             let cond = Conditions::seawater(u);
             let want = std::f64::consts::SQRT_2 * u * (tr.depth / g).sqrt();
-            // Match the ballistic default against an explicit Fixed hollow of the
+            // Match the ballistic closure against an explicit Fixed hollow of the
             // length the formula predicts.
-            let a = wave_resistance_with(&hull, &cond, &opts(TransomClosure::default()))
+            let ballistic = TransomClosure::Ballistic {
+                coeff: crate::BALLISTIC_COEFF,
+            };
+            let a = wave_resistance_with(&hull, &cond, &opts(ballistic))
                 .unwrap()
                 .resistance;
             let b =
@@ -807,6 +810,36 @@ mod transom {
                 (a - b).abs() <= 1e-9 * a.abs().max(1.0),
                 "U = {u}: ballistic {a} N vs explicit L_v = {want} m giving {b} N"
             );
+        }
+    }
+
+    #[test]
+    fn auto_hollow_is_ballistic_when_wet_and_wave_scaled_when_dry() {
+        let auto = TransomClosure::default();
+        let ballistic = TransomClosure::Ballistic {
+            coeff: crate::BALLISTIC_COEFF,
+        };
+        let g: f64 = 9.80665;
+        let d: f64 = 0.2;
+        let at = |fn_t: f64| {
+            let u = fn_t * (g * d).sqrt();
+            (g / (u * u), u)
+        };
+        // Wet: the ballistic length exactly.
+        let (nu, _) = at(2.0);
+        assert_eq!(auto.hollow_length(d, nu), ballistic.hollow_length(d, nu));
+        // Dry: half a transverse wavelength.
+        let (nu, u) = at(4.0);
+        let want = std::f64::consts::PI * u * u / g;
+        let got = auto.hollow_length(d, nu).unwrap();
+        assert!((got - want).abs() <= 1e-12 * want, "{got} vs {want}");
+        // Between: continuous and growing with speed.
+        let mut last = 0.0;
+        for i in 0..=40 {
+            let (nu, _) = at(2.0 + 0.05 * i as f64);
+            let l = auto.hollow_length(d, nu).unwrap();
+            assert!(l > last, "Fn_T {}: {l} after {last}", 2.0 + 0.05 * i as f64);
+            last = l;
         }
     }
 

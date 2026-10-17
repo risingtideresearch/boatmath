@@ -105,7 +105,11 @@ export function headingText(deg) {
 export function studyLabel(p, l) {
   const speed = `Fn ${fmt(p.froude, 3)}${l ? ` (${fmt(knots(p.froude, l), 2)} kn)` : ""}`;
   const c = p.closure || {};
-  const closure = c.type === "off" ? "no closure" : c.type === "fixed" ? `hollow ${fmt(c.length, 2)} m` : "";
+  const closure = c.type === "off" ? "no closure"
+    : c.type === "fixed" ? `hollow ${fmt(c.length, 2)} m`
+    : c.type === "ballistic" ? "ballistic hollow"
+    : c.type === "auto" && c.fraction != null && c.fraction !== 0.5 ? `dry hollow ${fmt(c.fraction, 2)} λ`
+    : "";
   const w = p.waves;
   const sea = !w ? "calm water" : [headingText(w.heading), w.sea ? `${w.sea.type === "jonswap" ? "JONSWAP" : "Bretschneider"} Hs ${fmt(w.sea.hs, 2)} m Tp ${fmt(w.sea.tp, 1)} s` : ""].filter(Boolean).join(", ");
   return [speed, sea, p.dynamic === false ? "held at rest's attitude" : "", closure].filter(Boolean).join(" · ");

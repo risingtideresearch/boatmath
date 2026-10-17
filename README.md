@@ -55,7 +55,9 @@ on the sectional hull's transforms without going through `thinship`.
   (`|∂f/∂x| ≪ 1`), no wave-breaking, deep water, an infinite fluid.
   Multihulls interfere exactly within that theory. A transom stern is
   closed by a virtual appendage (`TransomClosure`) whose hollow length is
-  a modelling choice, so transom-sterned results carry that uncertainty.
+  a modelling choice (by default the ballistic hollow while the transom is
+  wet, half a transverse wavelength once it runs dry), so transom-sterned
+  results carry that uncertainty.
   Thin-ship theory overstates `C_W` on full hulls.
 - **Viscous resistance** is the ITTC-57 line on each hull's wetted area,
   times a form factor, plus a roughness allowance. Neither is derived from

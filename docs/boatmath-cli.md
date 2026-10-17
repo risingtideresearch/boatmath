@@ -212,7 +212,7 @@ its hull's or case's statics whatever else is in the stream.
 
 ```json
 { "type": "study", "id": "…", "case": "<case id>", "kind": "calm",
-  "params": { "froude": 0.35, "dynamic": true, "closure": { "type": "ballistic", "coeff": 1.414 },
+  "params": { "froude": 0.35, "dynamic": true, "closure": { "type": "auto", "coeff": 1.414, "fraction": 0.5 },
               "grid": 640, "waves": null } }
 ```
 
@@ -322,7 +322,7 @@ See [Propellers and motors](#propellers-and-motors).
 | `mount (--stock NAME \| --kind K …)` | case* → + case* | the propulsion drive each case carries: its leg, pod or shaft and strut, and where its propeller sits |
 | `mounts` | → stock_mount* | the stock mounts `mount --stock` knows |
 | `statics` | hull*/case* → + statics*, sections* | each hull's hydrostatics, each case's float at rest and stability (and, for a case, its sections at rest) |
-| `study --froude LIST [--hold] [--closure C] [--grid N] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
+| `study --froude LIST [--hold] [--closure C] [--grid N] [--astern L] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
 | `run [-j N] [-q]` | study* → + result*, field*, sections* | compute each study |
 | `prop [--d-max L --wake --thrust-deduction --blades LIST --keller-k --top-froude F …]` | result* → + prop* | the best B-series propeller for each result's speed and thrust, on its case's drive |
 | `prop --thrust T --speed V --d-max L --depth D [--shafts N] …` | → prop | the same, for a thrust and speed given outright |
@@ -356,7 +356,14 @@ beam and draft only, and `--mass M` whichever of those (uniform, or with
 `--keep-length` beam and draft only) makes its design displacement M,
 k = (M/M₀)^⅓ or (M/M₀)^½.
 
-`--closure` is `ballistic[:COEFF]`, `fixed:LENGTH` or `off`. `--sea` is
+`--closure` is `auto[:FRACTION]` (the default), `ballistic[:COEFF]`,
+`fixed:LENGTH` or `off`. `auto` takes the ballistic hollow
+`L_v = √2·U·√(d_T/g)` while the transom is wet and `FRACTION` (default ½) of
+the transverse wavelength `2πU²/g` once it runs dry, blending between the two
+for transom Froude numbers `U/√(g·d_T)` from 2.5 to 3.5. `off` is the
+infinitely long hollow. `--astern L` takes a calm-water study's free surface
+`L` lengths behind the sterns (default 1.5) for a wider `wake` picture; it
+changes nothing else. `--sea` is
 `bretschneider:hs=H,tp=T` or `jonswap:hs=H,tp=T[,gamma=G]`.
 
 `run` needs no statics: a study held at rest (`--hold`) has its case's

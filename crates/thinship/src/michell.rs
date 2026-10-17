@@ -65,6 +65,20 @@ pub enum TransomClosure {
     /// ([`BALLISTIC_COEFF`]). Raising `c` lengthens the hollow and softens the
     /// transom's wave-making.
     Ballistic { coeff: f64 },
+    /// The ballistic hollow while the transom is wet, a fraction of the
+    /// transverse wavelength `2πU²/g` once it runs dry, blended between by
+    /// transom Froude number `Fn_T = U/√(g·d_T)` ([`AUTO_WET_FN_T`] to
+    /// [`AUTO_DRY_FN_T`]).
+    ///
+    /// Behind a dry transom the hollow is part of the hull's own wave, so
+    /// its length scales with the wave rather than with `d_T`. The ballistic
+    /// length there is a small fraction of a wavelength (0.95 m against 17 m
+    /// on a catamaran at Fn 0.56, Fn_T ≈ 4), and a hollow that short closes
+    /// almost as abruptly as the bare step: there it gave `R_w` 1.6× the
+    /// infinite hollow's, while any hollow from half a wavelength up came
+    /// within ±6% of it. This is an argument, not yet a validation: no CFD or
+    /// tank result with the transom immersed has been compared.
+    Auto { coeff: f64, fraction: f64 },
     /// Hollow of a prescribed length [m], independent of speed.
     ///
     /// `length = 0` is the bare step — the transom shutting instantaneously.
@@ -80,10 +94,21 @@ pub enum TransomClosure {
 /// horizontally at `U` falls `d_T` in `√(2d_T/g)`, travelling `√2·U·√(d_T/g)`.
 pub const BALLISTIC_COEFF: f64 = std::f64::consts::SQRT_2;
 
+/// [`TransomClosure::Auto`]'s dry hollow, in transverse wavelengths.
+pub const DRY_HOLLOW_FRACTION: f64 = 0.5;
+
+/// The transom Froude number below which [`TransomClosure::Auto`] takes the
+/// transom as wet (the ballistic hollow) …
+pub const AUTO_WET_FN_T: f64 = 2.5;
+
+/// … and above which it takes it as dry (a fraction of a wavelength).
+pub const AUTO_DRY_FN_T: f64 = 3.5;
+
 impl Default for TransomClosure {
     fn default() -> Self {
-        TransomClosure::Ballistic {
+        TransomClosure::Auto {
             coeff: BALLISTIC_COEFF,
+            fraction: DRY_HOLLOW_FRACTION,
         }
     }
 }
@@ -97,6 +122,15 @@ impl TransomClosure {
             TransomClosure::None => None,
             // L_v = c·U·√(d_T/g) = c·√(d_T/ν), since ν = g/U².
             TransomClosure::Ballistic { coeff } => Some(coeff * (depth / nu).sqrt()),
+            TransomClosure::Auto { coeff, fraction } => {
+                let wet = coeff * (depth / nu).sqrt();
+                let dry = fraction * 2.0 * PI / nu;
+                // Fn_T² = U²/(g·d_T) = 1/(ν·d_T); smoothstep across the band.
+                let fn_t = 1.0 / (nu * depth).sqrt();
+                let t = ((fn_t - AUTO_WET_FN_T) / (AUTO_DRY_FN_T - AUTO_WET_FN_T)).clamp(0.0, 1.0);
+                let w = t * t * (3.0 - 2.0 * t);
+                Some(wet + w * (dry - wet))
+            }
             TransomClosure::Fixed { length } => Some(length),
         }
         .filter(|l| l.is_finite() && *l >= 0.0)

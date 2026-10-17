@@ -821,7 +821,8 @@ pub fn flow_with_progress(
         Vec::new()
     };
 
-    // The free surface: from ahead of the bows to ~1.5 lengths astern.
+    // The free surface: from ahead of the bows to ~1.5 lengths astern (or
+    // `astern`).
     let (mut xa, mut xb, mut yh) = (f64::INFINITY, f64::NEG_INFINITY, 0.0f64);
     for (h, pl) in &members {
         let (a, b) = h.x_range();
@@ -829,7 +830,7 @@ pub fn flow_with_progress(
         xb = xb.max(b + pl.x);
         yh = yh.max(pl.y.abs() + 0.5 * files::max_beam(h));
     }
-    let (x0, x1) = (xa - 1.5 * l_ref, xb + 0.4 * l_ref);
+    let (x0, x1) = (xa - study.astern.unwrap_or(1.5) * l_ref, xb + 0.4 * l_ref);
     let yh = (yh + 0.45 * l_ref).max(0.3 * (x1 - x0));
     let nx = study.grid;
     // An odd row count, so y = 0 is a row and a symmetric fleet mirrors.
