@@ -377,8 +377,12 @@ it with any closure. All three are off by default.
 
 `--lift 2dt` gives the hulls a dynamic lift beside their thin-ship
 thickness: slender-body 2D+t on the sections at the attitude (each
-section's infinite-frequency added mass, the angle of attack the keel's
-over the run, Garme's transom reduction, cross-flow drag). It enters the
+section's infinite-frequency added mass, Garme's transom reduction,
+cross-flow drag), at the angle of attack of the trim alone — the hull's
+own shape, a run closing to its transom, being thin-ship's volume flux
+already. `--lift 2dt-run` takes the run's whole angle instead, trim and
+built-in rise or hook together: it counts a rockered run's camber lift but
+counts a closing stern twice. It enters the
 attitude solve as a force and moment, and the waves as a pressure patch on
 the bottom whose amplitude adds to the hull's in Michell's integral — so
 the lift's own wave drag and its interference with the hull's waves (and

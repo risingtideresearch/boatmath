@@ -25,12 +25,22 @@
 //!   method of [`seakeeping::section2d`], on the section as it is cut at the
 //!   attitude. There's no Wagner pile-up: these are sections immersed well
 //!   past their chines, not wedges entering.
-//! - `α` is the **keel's angle to the flow over the run**, the aft
-//!   [`RUN_FRACTION`] of the wetted length (least squares): the trim and the
-//!   run's own buttock angle together, as Savitsky's `τ` is the keel's.
-//!   Taking it from the run alone, not station by station, keeps the
-//!   forebody's sections deepening toward the keel — the hull's thickness —
-//!   out of the lift.
+//! - `α` is, by default, the **trim alone**: the attitude's rotation from
+//!   the design attitude, measured as the change in the keel's angle over
+//!   the run (the aft [`RUN_FRACTION`] of the wetted length, least squares).
+//!   Thin-ship's sources are the change in section area along the hull, so
+//!   whatever the hull's own shape does — a run whose sections close as its
+//!   keel rises to the transom — is already in them as volume flux. What
+//!   they cannot carry is the reaction to sections *carried down* as a rigid
+//!   body, which is what a trim does to every section as it passes: that,
+//!   and only that, is the lift. At the design attitude there is none.
+//!   The alternative ([`crate::params::LiftModel::TwoDTRun`]) takes the
+//!   run's whole angle, trim and built-in together, as Savitsky's `τ` is the
+//!   keel's: it counts a rockered or hooked run's camber lift, which the
+//!   trim alone misses, but on a stern that closes it counts the closing
+//!   twice (its suction is thin-ship's volume flux over again). Which split
+//!   the flow follows is a question for a viscous solver's vertical force
+//!   on a held hull, not settled here.
 //! - `C_T` is Garme's **transom reduction**, `tanh(k (x − x_T)/(B C_V))`
 //!   ([`TRANSOM_DECAY`] `= k`, `C_V = U/√(gB)`): the pressure falls to the
 //!   atmosphere's at a dry transom, where pure 2D+t would carry it to the
@@ -139,8 +149,30 @@ fn slope(pts: &[(f64, f64)]) -> f64 {
     }
 }
 
-/// The 2D+t lift of `hull`, cut at its attitude, at `cond`'s speed.
-pub fn sectional_lift(hull: &SectionalHull, cond: &Conditions) -> Lift {
+/// The keel's angle to the flow over the run, the aft [`RUN_FRACTION`] of
+/// the wetted length [rad], bow-up positive: `atan(−∂keel/∂x)`, the keel
+/// deepening aft being the bow up.
+pub fn run_angle(hull: &SectionalHull) -> f64 {
+    let keels: Vec<(f64, f64)> = hull
+        .curves()
+        .map(|(x, c)| (x, c.iter().map(|p| p.1).fold(0.0, f64::max)))
+        .filter(|&(_, k)| k > 1e-9)
+        .collect();
+    let (Some(&(x_aft, _)), Some(&(x_fwd, _))) = (keels.first(), keels.last()) else {
+        return 0.0;
+    };
+    let run: Vec<(f64, f64)> = keels
+        .into_iter()
+        .filter(|&(x, _)| x <= x_aft + RUN_FRACTION * (x_fwd - x_aft))
+        .collect();
+    (-slope(&run)).atan()
+}
+
+/// The 2D+t lift of `hull`, cut at its attitude, at `cond`'s speed, its
+/// angle of attack the run's angle less `reference`: the run's own angle at
+/// the design attitude for the trim alone, 0 for the run's whole angle (see
+/// the module).
+pub fn sectional_lift(hull: &SectionalHull, cond: &Conditions, reference: f64) -> Lift {
     let rho = cond.fluid.density;
     let u = cond.speed;
     let st: Vec<Station> = hull.curves().map(|(x, c)| station(x, c, rho)).collect();
@@ -152,13 +184,7 @@ pub fn sectional_lift(hull: &SectionalHull, cond: &Conditions) -> Lift {
     if !(length > 0.0) {
         return Lift::default();
     }
-    // The keel deepening aft is the bow up: α = atan(−∂keel/∂x) over the run.
-    let run: Vec<(f64, f64)> = wet
-        .iter()
-        .filter(|s| s.x <= x_aft + RUN_FRACTION * length)
-        .map(|s| (s.x, s.keel))
-        .collect();
-    let alpha = (-slope(&run)).atan();
+    let alpha = run_angle(hull) - reference;
     let beam = 2.0 * st.iter().map(|s| s.half_width).fold(0.0, f64::max);
     let cv = u / (cond.gravity * beam).sqrt();
     let transom = hull.transom().is_some();
@@ -251,7 +277,9 @@ mod tests {
         let g = 9.81;
         let cond = Conditions::seawater(cv * (g * b).sqrt());
         let rho = cond.fluid.density;
-        let lift = sectional_lift(&hull, &cond);
+        // The hull is built trimmed in a level frame: its whole run angle is
+        // the trim.
+        let lift = sectional_lift(&hull, &cond, 0.0);
         assert!((lift.alpha - tau).abs() < 1e-3, "α {}", lift.alpha);
         let buoyancy = rho * g * hull.displaced_volume();
         let dynamic = lift.patch.force();

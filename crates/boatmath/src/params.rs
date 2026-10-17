@@ -309,9 +309,13 @@ pub struct StudyParams {
 /// How a study's hulls lift (see [`crate::lift`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LiftModel {
-    /// Slender-body 2D+t on the sections at the attitude.
+    /// Slender-body 2D+t on the sections at the attitude, at the angle of
+    /// attack of the trim alone.
     #[serde(rename = "2dt")]
     TwoDT,
+    /// The same at the run's whole angle, trim and built-in together.
+    #[serde(rename = "2dt-run")]
+    TwoDTRun,
 }
 
 pub fn default_grid() -> usize {

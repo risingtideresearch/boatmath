@@ -228,7 +228,9 @@ enum Command {
         #[arg(long)]
         transom_drag: bool,
         /// The hulls' dynamic lift, in the attitude and the waves: 2dt
-        /// (slender-body 2D+t on the sections at the attitude).
+        /// (slender-body 2D+t on the sections at the attitude, at the trim's
+        /// angle of attack) or 2dt-run (at the run's whole angle, its
+        /// built-in rise or hook included).
         #[arg(long)]
         lift: Option<String>,
         /// In waves from these headings [deg, 180 head seas]; a LIST.
@@ -1008,7 +1010,8 @@ fn go(cli: Cli) -> Result<usize, String> {
             let lift = match lift.as_deref() {
                 None => None,
                 Some("2dt") => Some(boatmath::params::LiftModel::TwoDT),
-                Some(other) => return Err(format!("--lift {other}: expected 2dt")),
+                Some("2dt-run") => Some(boatmath::params::LiftModel::TwoDTRun),
+                Some(other) => return Err(format!("--lift {other}: expected 2dt or 2dt-run")),
             };
             let froudes = list::parse(&froude).map_err(|e| format!("--froude: {e}"))?;
             let closure = cl.as_deref().map(closure).transpose()?.unwrap_or_default();

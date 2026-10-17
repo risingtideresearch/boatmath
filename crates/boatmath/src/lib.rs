@@ -249,9 +249,29 @@ struct Lifting<'a> {
     x_ref: f64,
     /// Which members are hulls (the rest, a drive's parts, don't lift).
     hulls: Vec<bool>,
+    /// Each member's run angle the lift is measured from (see
+    /// [`lift::sectional_lift`]).
+    reference: Vec<f64>,
 }
 
-impl Lifting<'_> {
+impl<'a> Lifting<'a> {
+    /// The lift `model` asks for, on `s`'s hulls.
+    fn new(model: params::LiftModel, s: &Setup, cond: &'a Conditions, x_ref: f64) -> Self {
+        Lifting {
+            cond,
+            x_ref,
+            hulls: s.roles.iter().map(|r| r.0 == "hull").collect(),
+            reference: s
+                .design
+                .iter()
+                .map(|(h, _)| match model {
+                    params::LiftModel::TwoDT => lift::run_angle(h),
+                    params::LiftModel::TwoDTRun => 0.0,
+                })
+                .collect(),
+        }
+    }
+
     /// Each lifting member's lift at its attitude (`None` for the rest).
     fn lifts(&self, members: &[(SectionalHull, Placement)]) -> Vec<Option<lift::Lift>> {
         // A fleet that lost a member (dry) no longer lines up with the
@@ -261,7 +281,10 @@ impl Lifting<'_> {
             .iter()
             .enumerate()
             .map(|(i, (h, _))| {
-                (!known || self.hulls[i]).then(|| lift::sectional_lift(h, self.cond))
+                (!known || self.hulls[i]).then(|| {
+                    let reference = self.reference.get(i).copied().unwrap_or(0.0);
+                    lift::sectional_lift(h, self.cond, reference)
+                })
             })
             .collect()
     }
@@ -818,11 +841,7 @@ pub fn flow_with_progress(
             inner,
             report,
             extra,
-            lift: study.lift.map(|_| Lifting {
-                cond: &cond,
-                x_ref: lcg,
-                hulls: s.roles.iter().map(|r| r.0 == "hull").collect(),
-            }),
+            lift: study.lift.map(|m| Lifting::new(m, &s, &cond, lcg)),
         };
         let eq = solve_equilibrium_sectional_dynamic(
             &sources,
@@ -990,12 +1009,7 @@ pub fn flow_with_progress(
     // The hulls' lift at the attitude, as pressure in the waves beside
     // their thickness.
     let lifts: Vec<Option<lift::Lift>> = match study.lift {
-        Some(_) => Lifting {
-            cond: &cond,
-            x_ref: lcg,
-            hulls: s.roles.iter().map(|r| r.0 == "hull").collect(),
-        }
-        .lifts(&at_attitude),
+        Some(m) => Lifting::new(m, &s, &cond, lcg).lifts(&at_attitude),
         None => Vec::new(),
     };
     let patches: Vec<Option<&thinship::pressure::PressurePatch>> =
