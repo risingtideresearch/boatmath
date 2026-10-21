@@ -38,7 +38,6 @@
 //! [`float`] floats a fleet of hulls to carry a load, re-cutting each hull at
 //! every trial pose; a hydrodynamic crate can fold a speed-dependent load
 //! into the same solve through [`float::DynamicModel`].
-
 #![allow(
     clippy::type_complexity,
     clippy::needless_range_loop,

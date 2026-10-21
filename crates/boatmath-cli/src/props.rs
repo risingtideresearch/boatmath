@@ -228,6 +228,7 @@ pub fn auto_prop(
         inputs.wake = w;
         inputs.thrust_deduction = t;
         inputs.thrust = rt / ((1.0 - t) * cos_e);
+        inputs.shaft_angle_deg = drives.angle.to_degrees();
         let c = Config::new(&inputs);
         let s = sweep(
             &c,
@@ -274,6 +275,7 @@ pub fn auto_prop(
     inputs.wake = w;
     inputs.thrust_deduction = t;
     inputs.thrust = rt / ((1.0 - t) * cos_e);
+    inputs.shaft_angle_deg = drives.angle.to_degrees();
     let n = wakes.len() as f64;
     let interaction = json!({
         "model": "potential",
@@ -281,6 +283,7 @@ pub fn auto_prop(
         "w": wakes.iter().map(|k| k.w).sum::<f64>() / n,
         "w_local": wakes.iter().map(|k| k.w_local).sum::<f64>() / n,
         "w_wave": wakes.iter().map(|k| k.w_wave).sum::<f64>() / n,
+        "w_friction": wakes.iter().map(|k| k.w_friction).sum::<f64>() / n,
         "radial": wakes[0].radial,
         "t": ded.t,
         "delta_r": ded.delta_r,

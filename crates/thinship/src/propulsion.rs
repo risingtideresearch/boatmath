@@ -63,12 +63,15 @@ pub struct Disc {
 /// A disc's nominal wake.
 #[derive(Debug, Clone)]
 pub struct Wake {
-    /// The area-mean wake fraction, local and wave parts together.
+    /// The area-mean wake fraction, including potential (local + wave) and
+    /// frictional boundary-layer parts.
     pub w: f64,
     /// The local (Rankine) part: the potential wake.
     pub w_local: f64,
     /// The wave part: the hull's own waves' orbital velocity.
     pub w_wave: f64,
+    /// The frictional boundary-layer wake.
+    pub w_friction: f64,
     /// `(r/R, w)` of each ring, hub to tip.
     pub radial: Vec<(f64, f64)>,
 }
@@ -175,26 +178,86 @@ impl Interaction {
         Ok(())
     }
 
+    /// Boundary-layer frictional wake fraction at `(x, y, z)`: 1/7th-power-law
+    /// turbulent boundary layer delta(x) = 0.37 * x * Re_x^(-1/5) along the
+    /// wetted surface upstream of the disc, decaying downstream of the stern.
+    pub fn frictional_wake_at(&self, x: f64, y: f64, z: f64) -> f64 {
+        let u = self.cond.speed;
+        if u <= 0.0 {
+            return 0.0;
+        }
+        let nu = self.cond.fluid.kinematic_viscosity.max(1e-9);
+        let mut max_wf: f64 = 0.0;
+
+        for s in &self.sheets {
+            let xs = &s.xs[s.real_from..];
+            if xs.len() < 2 {
+                continue;
+            }
+            let x_stern = xs[0];
+            let x_bow = xs[xs.len() - 1];
+            // If the point is forward of the bow, there is no upstream boundary layer.
+            if x >= x_bow {
+                continue;
+            }
+            // Run length along the hull upstream of this station (x points forward).
+            let x_station = x.clamp(x_stern, x_bow);
+            let l_run = x_bow - x_station;
+            if l_run <= 0.0 {
+                continue;
+            }
+
+            let re_x = (u * l_run / nu).max(1e3);
+            let delta0 = 0.37 * l_run * re_x.powf(-0.2);
+
+            // Distance downstream of the stern (if aft of it).
+            let d_x = (x_stern - x).max(0.0);
+            // Turbulent wake spreading and centerline velocity defect decay downstream.
+            let delta = delta0 * (1.0 + 0.5 * d_x / delta0.max(1e-4)).sqrt();
+            let decay = 1.0 / (1.0 + 0.8 * d_x / delta0.max(1e-4)).sqrt();
+
+            // Find half-beam b at depth z and station x_station on this sheet.
+            let b = half_beam_at(s, x_station, z);
+
+            let dy = (y - s.y).abs() - b;
+            let dist = if z <= s.depth[s.depth.len() - 1] {
+                dy.max(0.0)
+            } else {
+                let dz = z - s.depth[s.depth.len() - 1];
+                (dy.max(0.0).powi(2) + dz.powi(2)).sqrt()
+            };
+
+            if dist < delta {
+                let local_wf = (1.0 - (dist / delta).powf(1.0 / 7.0)) * decay;
+                max_wf = max_wf.max(local_wf);
+            }
+        }
+        max_wf
+    }
+
     /// The nominal wake over a disc.
     pub fn wake(&self, d: &Disc) -> Result<Wake> {
         self.check_disc(d)?;
         let u = self.cond.speed;
         let pts = disc_points(d);
         let mut rings = vec![(0.0f64, 0.0f64); 6];
-        let (mut loc, mut wav, mut area) = (0.0, 0.0, 0.0);
-        let vals: Vec<(f64, f64)> = hullgeom::parallel::map_indexed(
+        let (mut loc, mut wav, mut fric, mut area) = (0.0, 0.0, 0.0, 0.0);
+        let vals: Vec<(f64, f64, f64)> = hullgeom::parallel::map_indexed(
             pts.len(),
             || (),
             |_, i| {
                 let (y, z, _, _) = pts[i];
-                self.phi_x(d.x, y, z)
+                let (l, w) = self.phi_x(d.x, y, z);
+                let wf = self.frictional_wake_at(d.x, y, z);
+                (l, w, wf)
             },
         );
-        for (&(_, _, da, ring), &(l, w)) in pts.iter().zip(&vals) {
+        for (&(_, _, da, ring), &(l, w, wf)) in pts.iter().zip(&vals) {
             loc += l * da;
             wav += w * da;
+            fric += wf * da;
             area += da;
-            rings[ring].0 += (l + w) * da;
+            rings[ring].0 += (l + w + wf * u) * da;
             rings[ring].1 += da;
         }
         let (gx, _) = gauss_legendre(6);
@@ -206,10 +269,14 @@ impl Interaction {
                 (r, s / a / u)
             })
             .collect();
+        let w_local = loc / area / u;
+        let w_wave = wav / area / u;
+        let w_friction = fric / area;
         Ok(Wake {
-            w: (loc + wav) / area / u,
-            w_local: loc / area / u,
-            w_wave: wav / area / u,
+            w: w_local + w_wave + w_friction,
+            w_local,
+            w_wave,
+            w_friction,
             radial,
         })
     }
@@ -271,6 +338,25 @@ impl Interaction {
     }
 }
 
+fn half_beam_at(s: &Sheet, x: f64, z: f64) -> f64 {
+    let xs = &s.xs[s.real_from..];
+    if xs.len() < 2 {
+        return 0.0;
+    }
+    let t = s.depth[s.depth.len() - 1];
+    let nz1 = s.nz1();
+    let i = (xs.partition_point(|&v| v <= x).max(1) - 1).min(xs.len() - 2) + s.real_from;
+    let dz = t / (nz1 - 1).max(1) as f64;
+    let j = ((z.clamp(0.0, t) / dz.max(1e-12)).floor() as usize).min(nz1 - 2);
+    let (fx, fz) = (
+        ((x - s.xs[i]) / (s.xs[i + 1] - s.xs[i]).max(1e-12)).clamp(0.0, 1.0),
+        ((z.clamp(0.0, t) - s.depth[j]) / dz.max(1e-12)).clamp(0.0, 1.0),
+    );
+    let f = |i: usize, j: usize| s.f[i * nz1 + j];
+    (1.0 - fx) * ((1.0 - fz) * f(i, j) + fz * f(i, j + 1))
+        + fx * ((1.0 - fz) * f(i + 1, j) + fz * f(i + 1, j + 1))
+}
+
 /// Whether `(x, y, z)` lies inside a sheet's real hull: within its
 /// half-beam there, interpolated between stations and depth rows.
 fn inside(s: &Sheet, x: f64, y: f64, z: f64) -> bool {
@@ -282,17 +368,7 @@ fn inside(s: &Sheet, x: f64, y: f64, z: f64) -> bool {
     if x < lo || x > hi || !(0.0..=t).contains(&z) {
         return false;
     }
-    let nz1 = s.nz1();
-    let i = (xs.partition_point(|&v| v <= x).max(1) - 1).min(xs.len() - 2) + s.real_from;
-    let dz = t / (nz1 - 1) as f64;
-    let j = ((z / dz).floor() as usize).min(nz1 - 2);
-    let (fx, fz) = (
-        ((x - s.xs[i]) / (s.xs[i + 1] - s.xs[i]).max(1e-12)).clamp(0.0, 1.0),
-        ((z - s.depth[j]) / dz).clamp(0.0, 1.0),
-    );
-    let f = |i: usize, j: usize| s.f[i * nz1 + j];
-    let half = (1.0 - fx) * ((1.0 - fz) * f(i, j) + fz * f(i, j + 1))
-        + fx * ((1.0 - fz) * f(i + 1, j) + fz * f(i + 1, j + 1));
+    let half = half_beam_at(s, x, z);
     (y - s.y).abs() < half
 }
 
@@ -417,12 +493,18 @@ mod tests {
             it.wake(&disc(0.1, -0.3)).unwrap(),
         );
         eprintln!(
-            "wake 0.1 m astern: w {:.4} (local {:.4}, wave {:.4}); 3 m astern {:.4}",
-            near.w, near.w_local, near.w_wave, far.w
+            "wake 0.1 m astern: w {:.4} (local {:.4}, wave {:.4}, friction {:.4}); 3 m astern {:.4}",
+            near.w, near.w_local, near.w_wave, near.w_friction, far.w
         );
         assert!(near.w_local > 0.0, "{near:?}");
+        assert!(near.w_friction > 0.0, "{near:?}");
+        assert!(
+            far.w_friction < near.w_friction,
+            "far {far:?} vs near {near:?}"
+        );
         assert!(far.w_local.abs() < near.w_local);
         assert!((port.w - stbd.w).abs() < 1e-9 * near.w.abs().max(1e-12));
+        assert!((port.w_friction - stbd.w_friction).abs() < 1e-9 * near.w.abs().max(1e-12));
     }
 
     /// The added resistance by the sinks' field over the hull and by the

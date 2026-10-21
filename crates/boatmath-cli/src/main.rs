@@ -304,6 +304,9 @@ enum Command {
         /// Keep the whole feasible curve, not just to 1.6× the least power.
         #[arg(long)]
         full_range: bool,
+        /// Shaft inclination angle [deg] (shaft tilted down toward stern / bow up).
+        #[arg(long, default_value_t = 0.0)]
+        shaft_angle: f64,
     },
     /// The motors that can drive each prop in the stream, each at its best
     /// reduction and point on the prop's curve, ranked: a drive record each.
@@ -1106,6 +1109,7 @@ fn go(cli: Cli) -> Result<usize, String> {
             top_speed,
             top_thrust,
             full_range,
+            shaft_angle,
         } => {
             let blades = list::parse(&blades)
                 .map_err(|e| format!("--blades: {e}"))?
@@ -1148,7 +1152,13 @@ fn go(cli: Cli) -> Result<usize, String> {
                 (None, None) => None,
                 _ => return Err("--top-speed and --top-thrust go together".into()),
             };
-            let base = |speed: f64, thrust: f64, shafts: u32, top, d_max: f64, depth: f64| {
+            let base = |speed: f64,
+                        thrust: f64,
+                        shafts: u32,
+                        top,
+                        d_max: f64,
+                        depth: f64,
+                        shaft_angle_deg: f64| {
                 propeller::bseries::Inputs {
                     speed,
                     thrust,
@@ -1164,6 +1174,7 @@ fn go(cli: Cli) -> Result<usize, String> {
                     re_correct: !no_re_correct,
                     strict_ear,
                     top,
+                    shaft_angle_deg,
                 }
             };
             let cap = if full_range { f64::INFINITY } else { 1.6 };
@@ -1174,12 +1185,23 @@ fn go(cli: Cli) -> Result<usize, String> {
                     // one the interaction computed alongside.
                     let used = |k: &str| r["inputs"][k].as_f64().unwrap_or(0.0);
                     let w = if i["settings"]["wake"] == true {
-                        format!(
-                            "w {:.3} (local {:.3}, wave {:.3})",
-                            used("wake"),
-                            i["w_local"].as_f64().unwrap_or(0.0),
-                            i["w_wave"].as_f64().unwrap_or(0.0)
-                        )
+                        let wf = i["w_friction"].as_f64().unwrap_or(0.0);
+                        if wf > 0.0 {
+                            format!(
+                                "w {:.3} (local {:.3}, wave {:.3}, friction {:.3})",
+                                used("wake"),
+                                i["w_local"].as_f64().unwrap_or(0.0),
+                                i["w_wave"].as_f64().unwrap_or(0.0),
+                                wf,
+                            )
+                        } else {
+                            format!(
+                                "w {:.3} (local {:.3}, wave {:.3})",
+                                used("wake"),
+                                i["w_local"].as_f64().unwrap_or(0.0),
+                                i["w_wave"].as_f64().unwrap_or(0.0)
+                            )
+                        }
                     } else {
                         format!("w {:.3} given", used("wake"))
                     };
@@ -1241,6 +1263,7 @@ fn go(cli: Cli) -> Result<usize, String> {
                         explicit_top,
                         d_max.ok_or("give --d-max")?,
                         depth.ok_or("give --depth (the shaft's immersion)")?,
+                        shaft_angle,
                     );
                     let r = props::prop(&cache, &inputs, None, cap, None, None)?;
                     failed += report(&r);
@@ -1284,7 +1307,10 @@ fn go(cli: Cli) -> Result<usize, String> {
                                     return Err("give --depth, or give the case a mount".into())
                                 }
                             };
-                            let inputs = base(v, t / cos_e, n, top, d_max, depth);
+                            let shaft_angle_deg = drives
+                                .as_ref()
+                                .map_or(shaft_angle, |d| d.angle.to_degrees());
+                            let inputs = base(v, t / cos_e, n, top, d_max, depth, shaft_angle_deg);
                             match &auto {
                                 Some(a) => props::auto_prop(&s, &cache, r, inputs, a, cap),
                                 None => props::prop(

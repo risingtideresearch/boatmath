@@ -530,9 +530,10 @@ What each step does with a mount:
   `T = R_t / ((1 − t) cos ε)`, ε the thrust line's angle to the flow: the
   shaft angle plus the running trim (zero, give or take the trim, for a
   saildrive or outboard). The propeller sees `V_A cos ε` along its axis and
-  `V_A sin ε` across it; the B-series takes the axial part, and the cross
-  flow, which loads the blades cyclically and brings cavitation on early,
-  is flagged above a few degrees (`oblique` in the prop record).
+  `V_A sin ε` across it; Gutsche's oblique-flow correction integrates the
+  cyclic blade loading over each revolution into the B-series polynomials and
+  reduces the cavitation margin for cross-flow, flagged when oblique (`oblique`
+  in the prop record).
 - **Wake and thrust deduction.** Being members of the platform, the
   drive's parts are in both: their potential flow is in the wake at the disc
   (a pod directly ahead of its propeller is most of a saildrive's or pod
@@ -802,12 +803,10 @@ boatmath statics < g150.jsonl | boatmath cad --heel 15,45 -o g150-gz.igs
 - propopt's Python-only work: the BEM correction for an extended or scanned
   geometry (`--geometry`), and its own hull models (the hull pipeline
   replaces those).
-- Mounts: `shaft` after the other three; a correction to the propeller's
-  thrust and torque in oblique flow (Gutsche), beyond the flag; the
+- Mounts: `shaft` after the other three; the
   stock-mount table itself (Oceanvolt, ePropulsion and Fischer Panda, each
   entry from the maker's installation drawings).
-- The rest of the wake and thrust deduction: the frictional wake (a
-  boundary-layer estimate), the propeller's own waves in the thrust
+- The rest of the wake and thrust deduction: the propeller's own waves in the thrust
   deduction, and a bottom-pressure term for flat runs and transoms.
 - Warm starts: the web worker starts each equilibrium from the nearest
   speed already solved. `run` starts every one from scratch.

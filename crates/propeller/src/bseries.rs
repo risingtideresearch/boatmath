@@ -181,9 +181,13 @@ fn chord075(d: f64, ear: f64, z: f64) -> f64 {
     2.073 * (ear / z) * d
 }
 
-fn reynolds075(d: f64, ear: f64, z: f64, v_a: f64, n: f64) -> f64 {
-    let v_r = (v_a * v_a + (0.75 * std::f64::consts::PI * n * d).powi(2)).sqrt();
-    chord075(d, ear, z) * v_r / NU
+fn reynolds075(d: f64, ear: f64, z: f64, v_a: f64, n: f64, shaft_angle_deg: f64) -> f64 {
+    let eps = shaft_angle_deg.to_radians();
+    let (sin_e, cos_e) = eps.sin_cos();
+    let v_r2 = (v_a * cos_e).powi(2)
+        + (0.75 * std::f64::consts::PI * n * d).powi(2)
+        + 0.5 * (v_a * sin_e).powi(2);
+    chord075(d, ear, z) * v_r2.sqrt() / NU
 }
 
 fn thickness_ratio075(ear: f64, z: f64) -> f64 {
@@ -203,8 +207,15 @@ struct Reynolds {
     cd_formula_ok: bool,
 }
 
-fn reynolds_correction(d: f64, ear: f64, z: f64, v_a: f64, n: f64) -> Reynolds {
-    let re = reynolds075(d, ear, z, v_a, n);
+fn reynolds_correction(
+    d: f64,
+    ear: f64,
+    z: f64,
+    v_a: f64,
+    n: f64,
+    shaft_angle_deg: f64,
+) -> Reynolds {
+    let re = reynolds075(d, ear, z, v_a, n, shaft_angle_deg);
     let tc = thickness_ratio075(ear, z);
     let d_cd = section_drag_coefficient(re, tc) - section_drag_coefficient(RE_FIT, tc);
     let cz_d = 2.073 * ear;
@@ -232,17 +243,20 @@ fn projected_area_ratio(ear: f64, pd: f64) -> f64 {
     ear * (1.067 - 0.229 * pd)
 }
 
-fn vr2_07(v_a: f64, n: f64, d: f64) -> f64 {
-    v_a * v_a + (0.7 * std::f64::consts::PI * n * d).powi(2)
+fn vr2_07(v_a: f64, n: f64, d: f64, shaft_angle_deg: f64) -> f64 {
+    let eps = shaft_angle_deg.to_radians();
+    let (sin_e, cos_e) = eps.sin_cos();
+    (v_a * cos_e).powi(2) + (0.7 * std::f64::consts::PI * n * d + v_a * sin_e.abs()).powi(2)
 }
 
-fn cavitation_number07(v_a: f64, n: f64, d: f64, depth: f64) -> f64 {
-    (static_pressure(depth) - P_VAPOUR) / (0.5 * RHO * vr2_07(v_a, n, d).max(1e-12))
+fn cavitation_number07(v_a: f64, n: f64, d: f64, depth: f64, shaft_angle_deg: f64) -> f64 {
+    (static_pressure(depth) - P_VAPOUR)
+        / (0.5 * RHO * vr2_07(v_a, n, d, shaft_angle_deg).max(1e-12))
 }
 
-fn burrill_tau_c(t: f64, ear: f64, pd: f64, d: f64, v_a: f64, n: f64) -> f64 {
+fn burrill_tau_c(t: f64, ear: f64, pd: f64, d: f64, v_a: f64, n: f64, shaft_angle_deg: f64) -> f64 {
     let a_p = projected_area_ratio(ear, pd) * (std::f64::consts::PI * d * d / 4.0);
-    t / (0.5 * RHO * a_p.max(1e-12) * vr2_07(v_a, n, d).max(1e-12))
+    t / (0.5 * RHO * a_p.max(1e-12) * vr2_07(v_a, n, d, shaft_angle_deg).max(1e-12))
 }
 
 fn burrill_tau_allow(sigma: f64) -> f64 {
@@ -281,6 +295,9 @@ pub struct Inputs {
     /// A second operating point the same propeller must reach: speed [m/s]
     /// and total thrust [N].
     pub top: Option<TopInputs>,
+    /// Shaft inclination angle [deg] (shaft tilted down toward stern / bow up).
+    #[serde(default)]
+    pub shaft_angle_deg: f64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -311,6 +328,7 @@ pub struct Config {
     pub grid_d: usize,
     pub grid_ear: usize,
     pub top: Option<TopConfig>,
+    pub shaft_angle_deg: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -354,6 +372,7 @@ impl Config {
                     t_total: t.thrust,
                     t_target: t.thrust / shafts as f64,
                 }),
+            shaft_angle_deg: i.shaft_angle_deg,
         }
     }
 }
@@ -470,6 +489,47 @@ fn solve_pitch(p: &Pitch, kt_req: f64, dkt_per_pd: f64, pd_lo: f64, pd_hi: f64) 
     0.5 * (lo + hi)
 }
 
+/// Gutsche's oblique-flow / inclined-shaft correction: when the shaft angle
+/// is nonzero, the inflow velocity decomposes into an axial component
+/// V_A cos(eps) and a transverse component V_A sin(eps). As the blade sweeps
+/// azimuth theta in [0, 2pi), the effective advance ratio J(theta) oscillates
+/// and the local dynamic head varies. Integrating over the revolution gives
+/// the effective degree-6 pitch polynomials for mean K_T and K_Q.
+fn effective_pitch_polynomials(
+    v_a: f64,
+    shaft_angle_deg: f64,
+    n: f64,
+    d: f64,
+    ear: f64,
+    z: f64,
+) -> (Pitch, f64) {
+    if shaft_angle_deg == 0.0 {
+        let j = v_a / (n * d);
+        return (pitch_polynomials(j, ear, z), j);
+    }
+    let eps = shaft_angle_deg.to_radians();
+    let (sin_e, cos_e) = eps.sin_cos();
+    let v_ax = v_a * cos_e;
+    let j_a = v_ax / (n * d);
+    let lambda = (j_a * sin_e.abs() / cos_e.abs().max(1e-6)) / (0.7 * std::f64::consts::PI);
+    let denom0 = j_a * j_a + (0.7 * std::f64::consts::PI).powi(2);
+    const N: usize = 16;
+    let mut p_eff = Pitch::default();
+    for k in 0..N {
+        let theta = 2.0 * std::f64::consts::PI * (k as f64) / (N as f64);
+        let s_th = theta.sin();
+        let denom_th = (1.0 - lambda * s_th).max(0.05);
+        let j_th = (j_a / denom_th).clamp(J_BOUNDS[0], J_BOUNDS[1]);
+        let w_th = (j_a * j_a + (0.7 * std::f64::consts::PI * denom_th).powi(2)) / denom0;
+        let p = pitch_polynomials(j_th, ear, z);
+        for i in 0..7 {
+            p_eff.a[i] += p.a[i] * w_th / (N as f64);
+            p_eff.b[i] += p.b[i] * w_th / (N as f64);
+        }
+    }
+    (p_eff, j_a)
+}
+
 /// A fixed propeller at the second operating point: the shaft speed that
 /// makes its thrust there, or `None` if it can't inside the series.
 fn at_condition(
@@ -480,22 +540,23 @@ fn at_condition(
     ear: f64,
     z: f64,
 ) -> Option<TopPoint> {
+    let cos_e = c.shaft_angle_deg.to_radians().cos();
+    let v_ax = top.v_a * cos_e;
     let thrust_at = |n: f64| -> Option<f64> {
-        let j = top.v_a / (n * d);
+        let (p, j) = effective_pitch_polynomials(top.v_a, c.shaft_angle_deg, n, d, ear, z);
         if !(J_BOUNDS[0]..=J_BOUNDS[1]).contains(&j) {
             return None;
         }
-        let p = pitch_polynomials(j, ear, z);
         let dkt = if c.re_correct {
-            reynolds_correction(d, ear, z, top.v_a, n).dkt_per_pd * pd
+            reynolds_correction(d, ear, z, top.v_a, n, c.shaft_angle_deg).dkt_per_pd * pd
         } else {
             0.0
         };
         let kt = polyval6(&p.a, pd) + dkt;
         (kt > 0.0).then(|| RHO * n * n * d.powi(4) * kt)
     };
-    let mut lo = top.v_a / (J_BOUNDS[1] * d);
-    let mut hi = top.v_a / (J_BOUNDS[0] * d);
+    let mut lo = v_ax / (J_BOUNDS[1] * d);
+    let mut hi = v_ax / (J_BOUNDS[0] * d);
     let want = top.t_target;
     match thrust_at(hi * 0.999) {
         Some(t) if t >= want => {}
@@ -509,10 +570,9 @@ fn at_condition(
         }
     }
     let n = 0.5 * (lo + hi);
-    let j = top.v_a / (n * d);
-    let p = pitch_polynomials(j, ear, z);
+    let (p, j) = effective_pitch_polynomials(top.v_a, c.shaft_angle_deg, n, d, ear, z);
     let (dkt, dkq) = if c.re_correct {
-        let rc = reynolds_correction(d, ear, z, top.v_a, n);
+        let rc = reynolds_correction(d, ear, z, top.v_a, n, c.shaft_angle_deg);
         (rc.dkt_per_pd * pd, rc.dkq)
     } else {
         (0.0, 0.0)
@@ -527,8 +587,8 @@ fn at_condition(
     if !(p_shaft > 0.0) {
         return None;
     }
-    let sigma = cavitation_number07(top.v_a, n, d, c.depth);
-    let tau_c = burrill_tau_c(want, ear, pd, d, top.v_a, n);
+    let sigma = cavitation_number07(top.v_a, n, d, c.depth, c.shaft_angle_deg);
+    let tau_c = burrill_tau_c(want, ear, pd, d, top.v_a, n, c.shaft_angle_deg);
     let tau_allow = burrill_tau_allow(sigma);
     let ear_min = keller_min_ear(want, d, z, c.depth, c.keller_k);
     Some(TopPoint {
@@ -540,7 +600,7 @@ fn at_condition(
         T: want,
         Q: q,
         P_shaft: p_shaft,
-        eta0: want * top.v_a / p_shaft,
+        eta0: want * v_ax / p_shaft,
         sigma,
         tau_c,
         tau_allow,
@@ -565,7 +625,7 @@ fn thrust_loading(t: f64, d: f64, v_a: f64) -> Option<(f64, f64)> {
 
 /// One (D, EAR, Z) at shaft speed `n` [rev/s], pitch sized to the thrust.
 pub fn evaluate(c: &Config, n: f64, d: f64, ear: f64, z: f64) -> Option<Design> {
-    let j = c.v_a / (n * d);
+    let (p, j) = effective_pitch_polynomials(c.v_a, c.shaft_angle_deg, n, d, ear, z);
     if !(J_BOUNDS[0]..=J_BOUNDS[1]).contains(&j) {
         return None;
     }
@@ -576,12 +636,11 @@ pub fn evaluate(c: &Config, n: f64, d: f64, ear: f64, z: f64) -> Option<Design> 
     let mut rc = None;
     let (mut dkt_per_pd, mut dkq) = (0.0, 0.0);
     if c.re_correct {
-        let r = reynolds_correction(d, ear, z, c.v_a, n);
+        let r = reynolds_correction(d, ear, z, c.v_a, n, c.shaft_angle_deg);
         dkt_per_pd = r.dkt_per_pd;
         dkq = r.dkq;
         rc = Some(r);
     }
-    let p = pitch_polynomials(j, ear, z);
     let pd = solve_pitch(&p, kt_req, dkt_per_pd, PD_BOUNDS[0], PD_BOUNDS[1]);
     if !(pd > 0.0) {
         return None;
@@ -595,20 +654,21 @@ pub fn evaluate(c: &Config, n: f64, d: f64, ear: f64, z: f64) -> Option<Design> 
     if !(p_shaft > 0.0) {
         return None;
     }
-    let eta0 = c.t_target * c.v_a / p_shaft;
+    let cos_e = c.shaft_angle_deg.to_radians().cos();
+    let eta0 = c.t_target * (c.v_a * cos_e) / p_shaft;
     if !(eta0 > 0.0) || !eta0.is_finite() {
         return None;
     }
-    let load = thrust_loading(c.t_target, d, c.v_a);
+    let load = thrust_loading(c.t_target, d, c.v_a * cos_e);
     let top = c
         .top
         .as_ref()
         .and_then(|t| at_condition(c, t, d, pd, ear, z));
-    let rc = rc.unwrap_or_else(|| reynolds_correction(d, ear, z, c.v_a, n));
+    let rc = rc.unwrap_or_else(|| reynolds_correction(d, ear, z, c.v_a, n, c.shaft_angle_deg));
     let ear_min = keller_min_ear(c.t_target, d, z, c.depth, c.keller_k);
     let keller_ok = ear >= ear_min;
-    let sigma = cavitation_number07(c.v_a, n, d, c.depth);
-    let tau_c = burrill_tau_c(c.t_target, ear, pd, d, c.v_a, n);
+    let sigma = cavitation_number07(c.v_a, n, d, c.depth, c.shaft_angle_deg);
+    let tau_c = burrill_tau_c(c.t_target, ear, pd, d, c.v_a, n, c.shaft_angle_deg);
     let tau_allow = burrill_tau_allow(sigma);
     let burrill_ok = tau_c <= tau_allow;
     if c.cavitation && !(keller_ok && burrill_ok) {
@@ -1116,5 +1176,80 @@ pub fn sweep(c: &Config, o: &SweepOptions) -> Sweep {
         topOkCount: top_ok_count,
         topFeasible: c.top.is_none() || top_ok_count > 0,
         points,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_inputs() -> Inputs {
+        Inputs {
+            speed: 4.0,
+            thrust: 230.0,
+            shafts: 2,
+            wake: 0.1,
+            thrust_deduction: 0.05,
+            d_min: 0.04,
+            d_max: 0.35,
+            blades: vec![3, 4],
+            depth: 0.25,
+            keller_k: 0.1,
+            cavitation: true,
+            re_correct: true,
+            strict_ear: false,
+            top: None,
+            shaft_angle_deg: 0.0,
+        }
+    }
+
+    #[test]
+    fn test_zero_shaft_angle_matches_axial() {
+        let i0 = base_inputs();
+        let c0 = Config::new(&i0);
+        let d0 = evaluate(&c0, 20.0, 0.25, 0.50, 3.0).unwrap();
+
+        let mut i_zero = base_inputs();
+        i_zero.shaft_angle_deg = 0.0;
+        let c_zero = Config::new(&i_zero);
+        let d_zero = evaluate(&c_zero, 20.0, 0.25, 0.50, 3.0).unwrap();
+
+        assert_eq!(d0.J, d_zero.J);
+        assert_eq!(d0.PD, d_zero.PD);
+        assert_eq!(d0.K_T, d_zero.K_T);
+        assert_eq!(d0.K_Q, d_zero.K_Q);
+        assert_eq!(d0.P_shaft, d_zero.P_shaft);
+        assert_eq!(d0.eta0, d_zero.eta0);
+        assert_eq!(d0.sigma, d_zero.sigma);
+    }
+
+    #[test]
+    fn test_oblique_flow_correction_effects() {
+        let i0 = base_inputs();
+        let c0 = Config::new(&i0);
+        let d0 = evaluate(&c0, 20.0, 0.25, 0.50, 3.0).unwrap();
+
+        let mut i_oblique = base_inputs();
+        i_oblique.shaft_angle_deg = 8.0; // 8 degrees inclined shaft
+        let c_oblique = Config::new(&i_oblique);
+        let d_ob = evaluate(&c_oblique, 20.0, 0.25, 0.50, 3.0).unwrap();
+
+        // Cross-flow increases peak relative blade velocity, reducing cavitation index sigma:
+        assert!(
+            d_ob.sigma < d0.sigma,
+            "sigma: {} vs {}",
+            d_ob.sigma,
+            d0.sigma
+        );
+
+        // Axial advance ratio is J * cos(8 deg) < J:
+        let cos_8 = 8.0f64.to_radians().cos();
+        assert!((d_ob.J - d0.J * cos_8).abs() < 1e-12);
+
+        // Due to shaft inclination, useful thrust power along direction of advance is reduced by cos(eps):
+        assert!(d_ob.eta0 < d0.eta0);
+
+        // Effective pitch required to hold thrust changes with cross-flow:
+        assert!(d_ob.PD != d0.PD);
     }
 }
