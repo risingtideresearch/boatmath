@@ -75,6 +75,9 @@ pub struct CaseParams {
     /// Roll damping, a fraction of critical (bilge keels, appendages).
     #[serde(default)]
     pub roll_damping: f64,
+    /// A propulsion drive on each hull of the platform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<crate::mount::Mount>,
 }
 
 impl Default for CaseParams {
@@ -89,6 +92,7 @@ impl Default for CaseParams {
             kyy: None,
             kzz: None,
             roll_damping: 0.0,
+            mount: None,
         }
     }
 }
@@ -102,6 +106,11 @@ impl CaseParams {
         positive("kxx", self.kxx)?;
         positive("kyy", self.kyy)?;
         positive("kzz", self.kzz)?;
+        if let Some(ref m) = self.mount {
+            finite("mount.x", Some(m.x))?;
+            finite("mount.y", Some(m.y))?;
+            finite("mount.shaft_depth", Some(m.shaft_depth))?;
+        }
         if !(self.roll_damping >= 0.0 && self.roll_damping < 1.0) {
             return Err("roll damping: expected a fraction of critical, 0 to 1".into());
         }
@@ -423,7 +432,12 @@ mod tests {
 
         let c = case(r#"{"mass_by": "scale"}"#);
         assert_eq!(c.hash(), case("{}").hash(), "no mass, nothing to scale");
+        assert_eq!(c.hash(), case(r#"{"mount": null}"#).hash());
         assert_ne!(case(r#"{"span": 3}"#).hash(), case("{}").hash());
+        assert_ne!(
+            case(r#"{"mount": {"kind": "saildrive", "x": 1.0, "shaft_depth": 0.5, "leg": {"chord": 0.3, "thickness": 0.04}}}"#).hash(),
+            case("{}").hash()
+        );
     }
 
     #[test]

@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 pub fn from_file(name: &str, bytes: Vec<u8>, req: &LoftRequest) -> Result<Value, String> {
     let settings = LoadSettings {
         waterline_z: req.waterline.unwrap_or(0.0),
+        waterline: req.waterline,
         units: req.units,
         ..LoadSettings::default()
     };
@@ -40,6 +41,17 @@ pub fn from_file(name: &str, bytes: Vec<u8>, req: &LoftRequest) -> Result<Value,
         } else {
             posed(&g, &pose)
         };
+    }
+    if is_native(&bytes) {
+        let v: Value = serde_json::from_slice(&bytes).map_err(|e| format!("{name}: {e}"))?;
+        if v.get("kind").is_some() && v.get("hulls").is_some() {
+            let pose = req.pose();
+            return if pose.scale == 1.0 && pose.scale_yz == 1.0 {
+                Ok(v)
+            } else {
+                posed(&v, &pose)
+            };
+        }
     }
     let wl = settings.waterline_z;
     let pose = req.pose();
@@ -227,6 +239,11 @@ pub fn posed(v: &Value, pose: &HullPose) -> Result<Value, String> {
 }
 
 pub fn open_value(v: &Value) -> Result<SourceFile, String> {
+    if crate::camber::is_document(v) {
+        let doc = crate::camber::Document::parse(v).map_err(|e| format!("geometry: {e}"))?;
+        let g = crate::camber::geometry(&doc, None, None)?;
+        return open_value(&g);
+    }
     let (kind, source): (Kind, Box<dyn hullgeom::source::HullSource>) = match fleet(v)? {
         Fleet::Nurbs(f) => (Kind::Iges, Box::new(f)),
         Fleet::Mesh(f) => (Kind::Stl, Box::new(f)),

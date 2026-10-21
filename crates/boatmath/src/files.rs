@@ -18,6 +18,9 @@ pub enum Kind {
 pub struct LoadSettings {
     /// CAD height of the design waterline.
     pub waterline_z: f64,
+    /// Explicit design waterline, if given (Camber documents use their own
+    /// design waterline when this is None).
+    pub waterline: Option<f64>,
     pub centerplane: Option<f64>,
     pub stations: usize,
     pub rays: usize,
@@ -30,6 +33,7 @@ impl Default for LoadSettings {
         let d = SectionalOptions::default();
         LoadSettings {
             waterline_z: 0.0,
+            waterline: None,
             centerplane: None,
             stations: d.stations,
             rays: d.rays,
@@ -92,13 +96,31 @@ pub fn open_source_bytes(
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
         .trim_end();
-    if first.starts_with("michell-hull")
-        || first.starts_with("michell-offsets")
-        || text.trim_start().starts_with('{')
-    {
+    if first.starts_with("michell-hull") || first.starts_with("michell-offsets") {
         return Err(format!(
             "{path}: .hull control nets, offsets tables and sample grids are no longer \
-             read; import the CAD geometry (IGES or STL) instead"
+             read; import the CAD geometry (IGES, STL or Camber JSON) instead"
+        ));
+    }
+    if text.trim_start().starts_with('{') || lower.ends_with(".json") {
+        let v: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+        if crate::camber::is_document(&v) {
+            let doc = crate::camber::Document::parse(&v).map_err(|e| format!("{path}: {e}"))?;
+            let g = crate::camber::geometry(&doc, settings.waterline, settings.units)?;
+            let mut sf = crate::native::open_value(&g)?;
+            sf.path = path.into();
+            sf.waterline_z = settings.waterline_z;
+            return Ok(sf);
+        }
+        if v.get("kind").is_some() && v.get("hulls").is_some() {
+            let mut sf = crate::native::open_value(&v)?;
+            sf.path = path.into();
+            sf.waterline_z = settings.waterline_z;
+            return Ok(sf);
+        }
+        return Err(format!(
+            "{path}: expected a Camber document or native geometry JSON"
         ));
     }
     let looks_iges = lower.ends_with(".igs")
@@ -115,7 +137,7 @@ pub fn open_source_bytes(
         });
     }
     Err(format!(
-        "cannot determine the format of {path}: expected an IGES or STL file"
+        "cannot determine the format of {path}: expected an IGES, STL or Camber/native JSON file"
     ))
 }
 
@@ -149,6 +171,25 @@ pub fn open_geometry(
         });
     }
     let text = String::from_utf8(bytes).expect("checked utf8");
+    if text.trim_start().starts_with('{') || lower.ends_with(".json") {
+        let v: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+        if crate::camber::is_document(&v) {
+            let doc = crate::camber::Document::parse(&v).map_err(|e| format!("{path}: {e}"))?;
+            let g = crate::camber::geometry(&doc, settings.waterline, settings.units)?;
+            let mut sf = crate::native::open_value(&g)?;
+            sf.path = path.into();
+            return Ok(sf);
+        }
+        if v.get("kind").is_some() && v.get("hulls").is_some() {
+            let mut sf = crate::native::open_value(&v)?;
+            sf.path = path.into();
+            return Ok(sf);
+        }
+        return Err(format!(
+            "{path}: expected a Camber document or native geometry JSON"
+        ));
+    }
     let file =
         hullgeom::iges::parse(&text).map_err(|e| format!("{path}: IGES import failed: {e}"))?;
     let top = file
