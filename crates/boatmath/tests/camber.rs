@@ -69,6 +69,7 @@ fn sections_are_cambers() {
 /// its length to 1.5%. A hull of e12's size whose end is a transom (rvh,
 /// alumc) comes within 0.07% of camber's volume.
 #[test]
+#[allow(clippy::single_element_loop)]
 fn the_patches_displace_what_camber_does() {
     for name in ["flat-bottom"] {
         let d = doc(name);
@@ -104,6 +105,39 @@ fn the_patches_displace_what_camber_does() {
             );
         }
     }
+}
+
+/// A raw camber document file can be opened, lofted, and meshed directly
+/// without first converting it to native geometry JSON.
+#[test]
+fn camber_document_lofts_and_meshes_directly() {
+    let path = format!("{}/tests/camber/default.json", env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(boatmath::camber::is_camber(&bytes));
+
+    let settings = boatmath::files::LoadSettings::default();
+    let sf = boatmath::files::open_source_bytes("default.json", bytes.clone(), &settings).unwrap();
+    assert_eq!(sf.kind, boatmath::files::Kind::Iges);
+    assert_eq!(sf.source.len(), 1);
+
+    let gf = boatmath::files::open_geometry("default.json", bytes.clone(), &settings).unwrap();
+    assert_eq!(gf.kind, boatmath::files::Kind::Iges);
+    assert_eq!(gf.source.len(), 1);
+
+    let req = LoftRequest::default();
+    let cut = loft("default.json", bytes.clone(), &req).unwrap();
+    assert_eq!(cut["name"], "default.json");
+    let hulls = cut["hulls"].as_array().unwrap();
+    assert_eq!(hulls.len(), 1);
+    assert!(hulls[0]["displaced_volume"].as_f64().unwrap() > 0.0);
+
+    let geom = boatmath::geometry("default.json", bytes, &req).unwrap();
+    let z_range = geom["z_range"].as_array().unwrap();
+    let lo = z_range[0].as_f64().unwrap();
+    let hi = z_range[1].as_f64().unwrap();
+    assert!(lo < 0.0 && hi > 0.0, "z_range: [{lo}, {hi}]");
+    let meshes = geom["meshes"].as_array().unwrap();
+    assert_eq!(meshes.len(), 1);
 }
 
 #[test]

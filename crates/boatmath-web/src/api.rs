@@ -662,3 +662,82 @@ fn add_studies(app: &App, v: &Value, who: Option<&Who>) -> Result<Reply, Fail> {
     app.worker.poke();
     Ok(Reply::Json(json!({ "studies": rs })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_store(tag: &str) -> Arc<Store> {
+        let dir = std::env::temp_dir().join(format!(
+            "boatmath-api-{tag}-{}-{}",
+            std::process::id(),
+            boatmath_web::store::now()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        Arc::new(Store::open(&dir).unwrap())
+    }
+
+    #[test]
+    fn camber_document_uploads_and_views() {
+        let store = temp_store("camber");
+        let worker = Worker::new(Arc::clone(&store));
+        let app = App { store, worker };
+
+        let camber_path = format!(
+            "{}/../boatmath/tests/camber/default.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bytes = std::fs::read(&camber_path).unwrap();
+
+        // 1. Loft through api / shared loft
+        let sections = loft("default.json", bytes.clone(), &LoftRequest::default()).unwrap();
+        assert_eq!(sections["name"], "default.json");
+        let geom = geometry("default.json", bytes.clone(), &LoftRequest::default()).unwrap();
+        assert!(!geom["meshes"].as_array().unwrap().is_empty());
+
+        // 2. Upload via api::route POST /api/hulls
+        let mut body = {
+            let b = bytes.clone();
+            move || Ok(b.clone())
+        };
+        let q = vec![
+            ("file".to_string(), "default.json".to_string()),
+            ("name".to_string(), "camber_default".to_string()),
+        ];
+        let reply = route(&app, &Method::Post, "/api/hulls", &q, None, &mut body)
+            .unwrap()
+            .unwrap();
+        let json_reply = match reply {
+            Reply::Json(v) => v,
+            _ => panic!("expected json"),
+        };
+        assert_eq!(json_reply["created"], true);
+        let hull_id = json_reply["id"].as_i64().unwrap();
+
+        // 3. GET /api/hulls/:id
+        let reply = route(
+            &app,
+            &Method::Get,
+            &format!("/api/hulls/{hull_id}"),
+            &[],
+            None,
+            &mut || Ok(Vec::new()),
+        )
+        .unwrap()
+        .unwrap();
+        let h = match reply {
+            Reply::Json(v) => v,
+            _ => panic!("expected json"),
+        };
+        assert_eq!(h["name"], "camber_default");
+
+        // 4. Create a case on this camber hull
+        let case = CaseParams::default().canonical().unwrap();
+        let statics = statics("default.json", bytes, &LoftRequest::default(), &case).unwrap();
+        let (case_id, _) = app
+            .store
+            .add_case(hull_id, &case, "design", "test", Ok(&statics))
+            .unwrap();
+        assert!(case_id > 0);
+    }
+}
