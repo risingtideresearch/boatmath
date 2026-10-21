@@ -30,8 +30,8 @@ Integration by parts in $x$ requires the hull to **close** at both bow and stern
 In the naval-architecture literature, two distinct families of corrections exist for thin-ship theory:
 
 1. **Boundary-Layer Displacement Thickness ($\delta^*$):**
-   Methods such as Bašić et al. (2020) modify the effective hull offsets along the hull by adding the turbulent boundary-layer displacement thickness $f_{\text{eff}}(x, z) = f(x, z) + \delta^*(x)$. This accounts for viscous dampening of stern wave-making on full-form displacement ships where the boundary layer thickens rapidly along the run.
-   - In `boatmath`, turbulent boundary-layer thickness $\delta(x) = 0.37\,x\,\mathrm{Re}_x^{-1/5}$ is modeled in [`thinship::propulsion::Interaction::frictional_wake_at`](../crates/thinship/src/propulsion.rs) for propeller wake inflow (`w_friction`), **not** inside `TransomClosure`.
+   Methods such as Bašić et al. (2020) modify the effective hull slope along the hull by the turbulent boundary-layer displacement-thickness growth rate, $(\partial f/\partial x)_{\text{eff}} = \partial f/\partial x + \partial \delta^*/\partial x$. This accounts for viscous dampening of stern wave-making where the boundary layer thickens along the closing afterbody.
+   - In `boatmath`, this is available as an opt-in tangency correction via `WaveOptions { boundary_layer: true, .. }` ([`SectionalHull::boundary_layer_tangency`](../crates/hullgeom/src/sectional.rs) and [`SectionalHull::contract_with_tangency`](../crates/hullgeom/src/sectional.rs)) or `boatmath study --boundary-layer`, in addition to the propeller inflow wake model ([`thinship::propulsion::Interaction::frictional_wake_at`](../crates/thinship/src/propulsion.rs)).
 2. **Transom Hollow / Virtual Appendage (Doctors & Day 1997; Couser, Molland & Armstrong 1997):**
    When water separates cleanly from the sharp edge of a transom stern, it leaves a ventilated air cavity (or recirculating dead-water hollow) of length $L_v$ aft of the transom before the two sides of the wake meet on the centerplane. Inside the wave-making potential flow, the water surface bounding this hollow acts like a smooth, streamlined extension of the hull—a **virtual appendage** of length $L_v$ over which the effective half-breadth decays smoothly from $f_T(z)$ at $x = x_T$ to $0$ at $x = x_T - L_v$.
    - **This is what `TransomClosure` in `boatmath` implements.**
@@ -99,22 +99,30 @@ Running `cargo run --release --example e12_starccm` ([`crates/thinship/examples/
 | :---: | :---: | :---: | :--- | :---: | :---: | :---: | :---: |
 | **6 kn** | 0.335 | 3.59 | **STAR-CCM+ (coarse)** | **304.0** | **100.0** | **204.0** | baseline |
 | | | | `Ballistic` ($L_v = 0.38\text{ m}$) | 334.9 | 122.7 | 212.2 | +10.2% |
-| | | | `Auto + Transom` ($L_v = 3.05\text{ m} + R_{\text{tr}}$) | 306.0 | 93.8 | 212.2 | **+0.7%** |
+| | | | `Ballistic + BL` | 334.7 | 122.5 | 212.2 | +10.1% |
+| | | | `Auto + Transom` ($L_v = 3.05\text{ m} + R_{\text{tr}}$) | 306.0 | 93.9 | 212.2 | **+0.7%** |
+| | | | `Auto + Transom + BL` | 307.2 | 95.0 | 212.2 | +1.1% |
 | | | | `Auto` ($L_v = 3.05\text{ m}$) | 260.5 | 48.3 | 212.2 | -14.3% |
 | | | | `None` ($L_v = \infty$) | 251.9 | 39.7 | 212.2 | -17.1% |
 | **8 kn** | 0.447 | 4.79 | **STAR-CCM+ (coarse)** | **894.0** | **556.0** | **338.0** | baseline |
 | | | | `Ballistic` ($L_v = 0.51\text{ m}$) | 963.6 | 603.5 | 360.2 | +7.8% |
-| | | | `Auto + Transom` ($L_v = 5.43\text{ m} + R_{\text{tr}}$) | 755.3 | 395.0 | 360.2 | -15.5% |
+| | | | `Ballistic + BL` | 958.1 | 597.9 | 360.2 | +7.2% |
+| | | | `Auto + Transom` ($L_v = 5.43\text{ m} + R_{\text{tr}}$) | 755.3 | 395.1 | 360.2 | -15.5% |
+| | | | `Auto + Transom + BL` | 750.1 | 389.9 | 360.2 | -16.1% |
 | | | | `Auto` ($L_v = 5.43\text{ m}$) | 709.7 | 349.5 | 360.2 | -20.6% |
 | | | | `None` ($L_v = \infty$) | 801.6 | 441.4 | 360.2 | -10.3% |
 | **10 kn** | 0.559 | 5.99 | **STAR-CCM+ (coarse)** | **1232.0** | **718.0** | **513.0** | baseline |
 | | | | `Ballistic` ($L_v = 0.63\text{ m}$) | 1313.4 | 770.0 | 543.4 | +6.6% |
+| | | | `Ballistic + BL` | 1306.8 | 763.4 | 543.4 | +6.1% |
 | | | | `Auto + Transom` ($L_v = 8.48\text{ m} + R_{\text{tr}}$) | 1118.9 | 575.5 | 543.4 | -9.2% |
+| | | | `Auto + Transom + BL` | 1113.9 | 570.5 | 543.4 | -9.6% |
 | | | | `Auto` ($L_v = 8.48\text{ m}$) | 1073.3 | 529.9 | 543.4 | -12.9% |
 | | | | `None` ($L_v = \infty$) | 1099.0 | 555.6 | 543.4 | -10.8% |
 | **12 kn** | 0.670 | 7.19 | **STAR-CCM+ (coarse)** | **1532.0** | **787.0** | **745.0** | baseline |
-| | | | `Ballistic` ($L_v = 0.76\text{ m}$) | 1563.1 | 802.4 | 760.7 | **+2.0%** |
-| | | | `Auto + Transom` ($L_v = 12.21\text{ m} + R_{\text{tr}}$) | 1404.5 | 643.8 | 760.7 | -8.3% |
+| | | | `Ballistic` ($L_v = 0.76\text{ m}$) | 1563.1 | 802.4 | 760.7 | +2.0% |
+| | | | `Ballistic + BL` | 1556.2 | 795.5 | 760.7 | **+1.6%** |
+| | | | `Auto + Transom` ($L_v = 12.21\text{ m} + R_{\text{tr}}$) | 1404.5 | 643.9 | 760.7 | -8.3% |
+| | | | `Auto + Transom + BL` | 1400.3 | 639.6 | 760.7 | -8.6% |
 | | | | `Auto` ($L_v = 12.21\text{ m}$) | 1359.0 | 598.3 | 760.7 | -11.3% |
 | | | | `None` ($L_v = \infty$) | 1355.0 | 594.3 | 760.7 | -11.6% |
 
@@ -125,4 +133,7 @@ Running `cargo run --release --example e12_starccm` ([`crates/thinship/examples/
 2. **Why `Ballistic` and `Auto + Transom` Bracket the CFD Pressure Drag:**
    - Because E-12 has a shallow transom ($d_T = 7.5\text{ cm}$ at rest), even at 6 knots the transom Froude number is $\mathrm{Fn}_T = 3.59 > 3.5$ (fully dry).
    - At 6 kn ($\mathrm{Fn} = 0.335$), adding the dry-transom hydrostatic drag ($45.5\text{ N}$) to `Auto`'s far-field wave drag ($48.3\text{ N}$) gives **$93.8\text{ N}$ pressure drag** vs. **$100.0\text{ N}$ in STAR-CCM+** (and **$306.0\text{ N}$ vs. $304.0\text{ N}$ total drag**, within **0.7%**).
-   - At higher Froude numbers (8–12 kn, $\mathrm{Fn} = 0.45\text{–}0.67$), dynamic sinkage and bow-up trim in the free-to-heave-and-trim CFD simulation immerse the stern deeper into the trough of the hull's own wave system and add trim-induced pressure drag ($L \tan\tau$). Consequently, `Ballistic` (which keeps a shorter rooster-tail closure $L_v \approx 0.5\text{–}0.76\text{ m}$) tracks the CFD pressure drag within **+2% to +8%**, while `Auto + Transom` (at fixed resting trim) underpredicts by **8%–15%**. Running `boatmath study --transom-drag --lift 2dt` (or `--closure ballistic`) captures both effects.
+   - At higher Froude numbers (8–12 kn, $\mathrm{Fn} = 0.45\text{–}0.67$), dynamic sinkage and bow-up trim in the free-to-heave-and-trim CFD simulation immerse the stern deeper into the trough of the hull's own wave system and add trim-induced pressure drag ($L \tan\tau$). Consequently, `Ballistic` (which keeps a shorter rooster-tail closure $L_v \approx 0.5\text{–}0.76\text{ m}$) tracks the CFD pressure drag within **+1.6% to +7.8%**, while `Auto + Transom` (at fixed resting trim) underpredicts by **8%–15%**. Running `boatmath study --transom-drag --lift 2dt` (or `--closure ballistic`) captures both effects.
+3. **Effect of Boundary-Layer Displacement Thickness (`+ BL`):**
+   - Enabling the von Kármán / $1/7\text{th}$-power-law boundary-layer displacement-thickness tangency correction (`boundary_layer: true` / `--boundary-layer`) damps the stern wave-making at 8–12 kn by **5–7 N** (~1% of $R_w$), bringing `Ballistic + BL` at 12 kn to **795.5 N pressure drag vs. 787.0 N CFD** (**+1.6% total drag error**).
+   - Because E-12 is a high-length-to-beam catamaran ($L/B \approx 16$) at full-scale Reynolds number ($\mathrm{Re}_L \sim 3 \times 10^7$) whose stern terminates at a transom rather than closing sharply to a point, its stern wave-making is dominated by the transom hollow length $L_v$ and dry-transom hydrostatic drag $R_{\text{transom}}$ rather than by boundary-layer displacement thickness.

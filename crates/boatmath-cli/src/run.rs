@@ -524,6 +524,7 @@ mod tests {
             roughness: None,
             transom_drag: false,
             lift: None,
+            boundary_layer: false,
         }
     }
 

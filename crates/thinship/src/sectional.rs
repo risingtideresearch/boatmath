@@ -44,6 +44,17 @@ pub trait SectionalWave {
         closure: TransomClosure,
         scratch: &mut SectionalContracted,
     ) -> C64;
+    /// [`SectionalWave::amplitude_closed`] with an optional boundary-layer
+    /// displacement-thickness tangency slope `df_dx` (`∂δ*/∂x` per station;
+    /// empty when disabled).
+    fn amplitude_closed_with_tangency(
+        &self,
+        nu: f64,
+        lambda: f64,
+        closure: TransomClosure,
+        df_dx: &[f64],
+        scratch: &mut SectionalContracted,
+    ) -> C64;
 }
 
 impl SectionalWave for SectionalHull {
@@ -65,8 +76,19 @@ impl SectionalWave for SectionalHull {
         closure: TransomClosure,
         scratch: &mut SectionalContracted,
     ) -> C64 {
+        self.amplitude_closed_with_tangency(nu, lambda, closure, &[], scratch)
+    }
+
+    fn amplitude_closed_with_tangency(
+        &self,
+        nu: f64,
+        lambda: f64,
+        closure: TransomClosure,
+        df_dx: &[f64],
+        scratch: &mut SectionalContracted,
+    ) -> C64 {
         let kx = nu * lambda;
-        self.contract(nu * lambda * lambda, scratch);
+        self.contract_with_tangency(nu * lambda * lambda, df_dx, scratch);
         if !scratch.any() {
             return C64::ZERO;
         }
@@ -323,18 +345,20 @@ impl NearFieldKernel for SectionalKernel<'_> {
 }
 
 /// A hull's whole free-wave amplitude: its thickness, closed by `closure`,
-/// and the pressure of its lift (see [`crate::pressure`]), if it carries
-/// one; `scale` is `1/(2ρU²)`.
+/// optional boundary-layer tangency slope `df_dx`, and the pressure of its
+/// lift (see [`crate::pressure`]), if it carries one; `scale` is `1/(2ρU²)`.
+#[allow(clippy::too_many_arguments)]
 fn amplitude_lifted(
     hull: &SectionalHull,
     patch: Option<&PressurePatch>,
     nu: f64,
     lambda: f64,
     closure: TransomClosure,
+    df_dx: &[f64],
     scale: f64,
     scratch: &mut SectionalContracted,
 ) -> C64 {
-    let f = hull.amplitude_closed(nu, lambda, closure, scratch);
+    let f = hull.amplitude_closed_with_tangency(nu, lambda, closure, df_dx, scratch);
     match patch {
         Some(p) => f + p.amplitude(nu, lambda, hull.x_center(), scale),
         None => f,
@@ -347,6 +371,7 @@ fn amplitude_lifted(
 struct SectionalMember<'h> {
     hull: &'h SectionalHull,
     patch: Option<&'h PressurePatch>,
+    df_dx: Vec<f64>,
     scale: f64,
     scratch: SectionalContracted,
     dx: f64,
@@ -362,6 +387,7 @@ impl MemberWave for SectionalMember<'_> {
             nu,
             lambda,
             self.closure,
+            &self.df_dx,
             self.scale,
             &mut self.scratch,
         );
@@ -398,6 +424,7 @@ impl AmplitudeTable {
         patch: Option<&PressurePatch>,
         nu: f64,
         closure: TransomClosure,
+        df_dx: &[f64],
         scale: f64,
         lam_max: f64,
     ) -> Self {
@@ -410,7 +437,7 @@ impl AmplitudeTable {
                 (0..NODES)
                     .map(|j| {
                         let lam = lo + h * (p as f64 + 0.5 * (1.0 + cheb(j)));
-                        amplitude_lifted(hull, patch, nu, lam, closure, scale, scratch)
+                        amplitude_lifted(hull, patch, nu, lam, closure, df_dx, scale, scratch)
                     })
                     .collect::<Vec<_>>()
             });
@@ -545,6 +572,11 @@ fn floored_wave_resistance(
     // tabulate each original's amplitude that far, and let the fleet
     // integral interpolate the tables — exact to the interpolation's ~1e-10.
     let tw = twins(members);
+    let re_per_m = if opts.boundary_layer {
+        cond.speed / cond.fluid.kinematic_viscosity.max(1e-9)
+    } else {
+        0.0
+    };
     if tw.iter().any(Option::is_some) && members.iter().any(|(_, p)| p.y != members[0].1.y) {
         let originals: Vec<usize> = (0..members.len()).filter(|&i| tw[i].is_none()).collect();
         let collapsed: Vec<(&SectionalHull, Placement)> = originals
@@ -565,11 +597,17 @@ fn floored_wave_resistance(
         let tables: Vec<AmplitudeTable> = originals
             .iter()
             .map(|&i| {
+                let df_dx = if opts.boundary_layer {
+                    members[i].0.boundary_layer_tangency(re_per_m)
+                } else {
+                    Vec::new()
+                };
                 AmplitudeTable::new(
                     members[i].0,
                     patch(i),
                     nu,
                     opts.transom,
+                    &df_dx,
                     scale,
                     1.1 * group.max_lambda,
                 )
@@ -596,6 +634,11 @@ fn floored_wave_resistance(
         .map(|(i, (h, p))| SectionalMember {
             hull: h,
             patch: patch(i),
+            df_dx: if opts.boundary_layer {
+                h.boundary_layer_tangency(re_per_m)
+            } else {
+                Vec::new()
+            },
             scale,
             scratch: SectionalContracted::default(),
             dx: h.x_center() + p.x - cx_ref,
@@ -1128,6 +1171,7 @@ mod twin_tests {
             .map(|(h, p)| SectionalMember {
                 hull: h,
                 patch: None,
+                df_dx: Vec::new(),
                 scale: 0.0,
                 scratch: SectionalContracted::default(),
                 dx: h.x_center() + p.x - cx_ref,
@@ -1465,5 +1509,33 @@ mod transom_tests {
                 "{closure:?}: force {df:.3}, moment {dm:.3} off"
             );
         }
+    }
+
+    #[test]
+    fn boundary_layer_tangency_is_negative_and_grows_aft() {
+        let hull = crate::hulls::wigley(10.0, 1.0, 0.625).unwrap();
+        let sec = SectionalHull::from_hull(&hull, &DepthQuadrature::default()).unwrap();
+        let cond = Conditions::seawater(0.3 * (9.81 * sec.length()).sqrt());
+        let re_per_m = cond.speed / cond.fluid.kinematic_viscosity;
+        let df_dx = sec.boundary_layer_tangency(re_per_m);
+        assert!(df_dx.iter().all(|&s| s < 0.0), "{df_dx:?}");
+        // Stronger tangency slope at the stern (index 0) than at the bow (last).
+        assert!(df_dx[0].abs() > df_dx[df_dx.len() - 1].abs());
+        let rw_inv = wave_resistance(&sec, &cond, &WaveOptions::default()).unwrap();
+        let rw_bl = wave_resistance(
+            &sec,
+            &cond,
+            &WaveOptions {
+                boundary_layer: true,
+                ..WaveOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            rw_bl.resistance > 0.0 && (rw_bl.resistance - rw_inv.resistance).abs() > 1e-3,
+            "inv {} vs bl {}",
+            rw_inv.resistance,
+            rw_bl.resistance
+        );
     }
 }

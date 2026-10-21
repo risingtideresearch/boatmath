@@ -795,6 +795,7 @@ pub fn flow_with_progress(
     let rho = cond.fluid.density;
     let wave = WaveOptions {
         transom: closure,
+        boundary_layer: study.boundary_layer,
         ..WaveOptions::default()
     };
     let squat = thinship::squat::SquatOptions {
