@@ -2,6 +2,7 @@
 //! `tests/camber/make.mts` from camber's own sweep) holds the trimmed
 //! half-sections of `<name>.json` at a spread of the plan's parameter, the
 //! hull's ends, and camber's hydrostatics; boatmath must give the same.
+#![allow(clippy::single_element_loop)]
 
 use boatmath::camber::{Document, Hull};
 use boatmath::{hull_summary, loft, LoftRequest};

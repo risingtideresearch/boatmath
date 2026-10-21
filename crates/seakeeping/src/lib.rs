@@ -85,6 +85,11 @@
 //! hulls, and neither method ranks the four hulls reliably. Journée found the same discrepancies with his own
 //! Frank- and Ursell-based strip codes (MARIND 2001); they are strip
 //! theory's, on these hulls.
+#![allow(
+    clippy::type_complexity,
+    clippy::needless_range_loop,
+    clippy::neg_cmp_op_on_partial_ord
+)]
 
 pub mod froude_krylov;
 pub mod green;

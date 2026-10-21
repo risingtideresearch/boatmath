@@ -40,6 +40,7 @@ fn inputs(o: &Value) -> Inputs {
         re_correct: o["reCorrect"].as_bool().unwrap(),
         strict_ear: o["strictEAR"].as_bool().unwrap(),
         top,
+        shaft_angle_deg: 0.0,
     }
 }
 

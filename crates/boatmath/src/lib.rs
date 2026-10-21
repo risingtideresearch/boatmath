@@ -9,6 +9,7 @@
 //! depth-integral curve the kernel interpolates along x, the hydrostatics,
 //! and the transom with what the closure needs to draw its virtual appendage
 //! at any speed.
+#![allow(clippy::type_complexity)]
 
 use crate::files::{open_source_bytes, Kind, LoadSettings};
 use hullgeom::iges::{HullPose, Platform, SectionalImport};
