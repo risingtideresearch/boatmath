@@ -1,4 +1,4 @@
-//! `boatmath` — hulls, cases and studies on the `thinship`, `seakeeping` and `hullgeom` solvers: the
+//! `boatmath` — hulls, cases and studies on the `thinship`, `seakeeping`, `propeller` and `hullgeom` solvers: the
 //! computations the web app (`boatmath-web`) and the CLI share.
 //!
 //! A hull is seen the way the physics sees it: cut into sections.
@@ -9,6 +9,8 @@
 //! depth-integral curve the kernel interpolates along x, the hydrostatics,
 //! and the transom with what the closure needs to draw its virtual appendage
 //! at any speed.
+
+#![allow(clippy::type_complexity, clippy::single_element_loop)]
 
 use crate::files::{open_source_bytes, Kind, LoadSettings};
 use hullgeom::iges::{HullPose, Platform, SectionalImport};
@@ -33,7 +35,7 @@ use params::{CaseParams, StudyParams};
 pub use platform::{at_rest, heeled, statics, wave_gz, waves_with_progress};
 
 /// The solver version results are stamped with: the last commit to touch
-/// the solver's code (the geometry, thin-ship, seakeeping and CLI crates,
+/// the solver's code (the geometry, thin-ship, seakeeping, propeller and CLI crates,
 /// and this one), `-dirty` if they have uncommitted changes. Set by
 /// `build.rs`; `BOATMATH_SOLVER_VERSION` at build time overrides it.
 pub const SOLVER_VERSION: &str = env!("BOATMATH_SOLVER_VERSION");

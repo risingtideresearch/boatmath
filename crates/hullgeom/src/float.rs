@@ -702,7 +702,9 @@ fn equilibrium_core<M: Floating>(
             if metric < best.0 {
                 best = (metric, s, tau);
             }
-            if std::env::var("MICHELL_DEBUG_FLOAT").is_ok() {
+            if std::env::var("BOATMATH_DEBUG_FLOAT").is_ok()
+                || std::env::var("MICHELL_DEBUG_FLOAT").is_ok()
+            {
                 eprintln!(
                     "DBG iter={iterations} s={s:.6} tau={tau:.6} V={:.6} lcb={lcb:.6} \
                      Aw={:.4} Mw={:.4} Iw={:.4} ds={ds:.6} dtau={dtau:.6} dyn={forcing:?}",

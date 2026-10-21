@@ -69,6 +69,7 @@ fn sections_are_cambers() {
 /// its length to 1.5%. A hull of e12's size whose end is a transom (rvh,
 /// alumc) comes within 0.07% of camber's volume.
 #[test]
+#[allow(clippy::single_element_loop)]
 fn the_patches_displace_what_camber_does() {
     for name in ["flat-bottom"] {
         let d = doc(name);

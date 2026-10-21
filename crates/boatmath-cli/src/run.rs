@@ -17,7 +17,7 @@ use boatmath::{
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::io::Stdout;
+use std::io::Write;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -28,18 +28,26 @@ pub struct Options {
 
 /// Run `f` on each item (with its index) on up to `jobs` threads.
 fn pool<T: Sync>(items: &[T], jobs: usize, f: impl Fn(usize, &T) + Sync) {
+    if items.is_empty() {
+        return;
+    }
     let next = Mutex::new(0usize);
+    let workers = jobs.clamp(1, items.len().max(1));
     std::thread::scope(|s| {
-        for _ in 0..jobs.clamp(1, items.len().max(1)) {
-            s.spawn(|| loop {
-                let i = {
-                    let mut n = next.lock().unwrap();
-                    *n += 1;
-                    *n - 1
-                };
-                match items.get(i) {
-                    Some(item) => f(i, item),
-                    None => break,
+        for _ in 0..workers {
+            s.spawn(|| {
+                hullgeom::parallel::set_threads((hullgeom::parallel::available() / workers).max(1));
+                loop {
+                    let i = {
+                        let mut n = next.lock().unwrap();
+                        let idx = *n;
+                        *n += 1;
+                        idx
+                    };
+                    match items.get(i) {
+                        Some(item) => f(i, item),
+                        None => break,
+                    }
                 }
             });
         }
@@ -58,12 +66,80 @@ fn calm_of(study: &Value) -> Result<Option<Value>, String> {
         .then(|| study_record(study["case"].as_str().unwrap_or(""), p.calm(default_grid()))))
 }
 
-/// What's known as the run goes: results computed (or found) so far, and
-/// each case's attitude at rest.
+#[derive(Clone, Debug)]
+struct SolvedAttitude {
+    case: String,
+    params: StudyParams,
+    attitude: (f64, f64),
+}
+
+/// What's known as the run goes: results computed (or found) so far, each
+/// case's attitude at rest, and solved dynamic attitudes for warm-starting.
 #[derive(Default)]
 struct Known {
     results: HashMap<String, Value>,
     at_rest: HashMap<String, (f64, f64)>,
+    solved: Vec<SolvedAttitude>,
+}
+
+impl Known {
+    fn record(&mut self, study: &Value, result: &Value) {
+        let id = study["id"].as_str().unwrap_or("");
+        self.results.insert(id.to_string(), result.clone());
+
+        let case_id = match study["case"].as_str() {
+            Some(c) => c,
+            None => return,
+        };
+        let p = match params(study) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        if !p.dynamic || p.waves.is_some() {
+            return;
+        }
+        if result["forces"]["solved"].as_bool() != Some(true) {
+            return;
+        }
+        if let Some(att) = pair(&result["forces"], "sinkage", "trim_rad") {
+            self.record_attitude(case_id, &p, att);
+        }
+    }
+
+    fn record_attitude(&mut self, case_id: &str, p: &StudyParams, att: (f64, f64)) {
+        if let Some(existing) = self
+            .solved
+            .iter_mut()
+            .find(|s| s.case == case_id && s.params == *p)
+        {
+            existing.attitude = att;
+        } else {
+            self.solved.push(SolvedAttitude {
+                case: case_id.to_string(),
+                params: p.clone(),
+                attitude: att,
+            });
+        }
+    }
+
+    /// The equilibrium of the nearest speed already solved on this
+    /// case otherwise alike (`same_but_speed`), to start the solve from.
+    fn warm_start(&self, case_id: &str, p: &StudyParams) -> Option<(f64, f64)> {
+        if !p.dynamic || p.waves.is_some() {
+            return None;
+        }
+        self.solved
+            .iter()
+            .filter(|s| {
+                s.case == case_id && s.params.waves.is_none() && p.same_but_speed(&s.params)
+            })
+            .min_by(|a, b| {
+                (a.params.froude - p.froude)
+                    .abs()
+                    .total_cmp(&(b.params.froude - p.froude).abs())
+            })
+            .map(|s| s.attitude)
+    }
 }
 
 /// A result already in hand: in the stream, or in the cache with its field
@@ -88,17 +164,17 @@ fn found(s: &Stream, cache: &Cache, id: &str) -> Option<Vec<Value>> {
 
 /// Run the studies in the stream, writing it through and then each result
 /// (after the records it refers to) as it's ready. Returns how many failed.
-pub fn run(
+pub fn run<W: Write + Send>(
     s: &Stream,
-    out: &mut Out<Stdout>,
+    out: &mut Out<W>,
     cache: &Cache,
     opts: &Options,
 ) -> Result<usize, String> {
     out.pass(s)?;
     // Results are written in study order, each as soon as every one before
     // it is done, so a stream comes out the same however the jobs fall.
-    struct Queue<'o> {
-        out: &'o mut Out<Stdout>,
+    struct Queue<'o, W: Write + Send> {
+        out: &'o mut Out<W>,
         next: usize,
         ready: HashMap<usize, Vec<Value>>,
     }
@@ -153,6 +229,17 @@ pub fn run(
             }
         }
     }
+
+    // Pre-populate known with any studies already in stream or cache.
+    for study in &first {
+        let id = study["id"].as_str().unwrap_or("");
+        if let Some(rs) = found(s, cache, id) {
+            if let Some(r) = rs.last() {
+                known.lock().unwrap().record(study, r);
+            }
+        }
+    }
+
     let attempt = |seq: usize, study: &Value| {
         let id = study["id"].as_str().unwrap_or("");
         let records = match found(s, cache, id) {
@@ -162,11 +249,7 @@ pub fn run(
         let rs = match records {
             Ok(rs) => {
                 if let Some(r) = rs.last() {
-                    known
-                        .lock()
-                        .unwrap()
-                        .results
-                        .insert(id.to_string(), r.clone());
+                    known.lock().unwrap().record(study, r);
                 }
                 rs
             }
@@ -271,18 +354,26 @@ fn compute(
             } else {
                 Some(at_rest(s, known, case)?)
             };
+            let warm = if p.dynamic {
+                known
+                    .lock()
+                    .unwrap()
+                    .warm_start(case["id"].as_str().unwrap_or(""), &p)
+            } else {
+                None
+            };
             // With a drive and floating at speed, the attitude is the
             // self-propelled one: towed first, for the resistance the
             // thrust must meet, then with that thrust along the drives'
             // line. (Held at rest, the attitude is given.)
             let angle = thrusts.first().map_or(0.0, |t| t.angle);
             let mut propulsion = None;
-            let thrust = if p.dynamic && !thrusts.is_empty() {
+            let (thrust, warm) = if p.dynamic && !thrusts.is_empty() {
                 let towed = FlowRequest {
                     cut: src.import,
                     case: cp.clone(),
                     study: p.clone(),
-                    warm: None,
+                    warm,
                     hold: None,
                     thrust: None,
                     field: false,
@@ -303,24 +394,37 @@ fn compute(
                         "trim_deg": v0["forces"]["trim_deg"],
                     },
                 }));
-                Some(ThrustLine {
-                    thrust: t,
-                    at: thrusts.iter().map(|d| (d.x, d.z)).collect(),
-                    angle,
-                })
+                let towed_att = pair(&v0["forces"], "sinkage", "trim_rad");
+                (
+                    Some(ThrustLine {
+                        thrust: t,
+                        at: thrusts.iter().map(|d| (d.x, d.z)).collect(),
+                        angle,
+                    }),
+                    towed_att.or(warm),
+                )
             } else {
-                None
+                (None, warm)
             };
             let req = FlowRequest {
                 cut: src.import,
                 case: cp,
                 study: p.clone(),
-                warm: None,
+                warm,
                 hold,
                 thrust,
                 field: true,
             };
             let v = flow_with_progress(&src.file_name, src.bytes, &req, &mut report)?;
+            if p.dynamic && v["forces"]["solved"].as_bool() == Some(true) {
+                if let Some(att) = pair(&v["forces"], "sinkage", "trim_rad") {
+                    known.lock().unwrap().record_attitude(
+                        case["id"].as_str().unwrap_or(""),
+                        &p,
+                        att,
+                    );
+                }
+            }
             // The meshes are for drawing; the pictures re-pose the hull's
             // geometry at the attitude instead of keeping them.
             let field = json!({
@@ -401,4 +505,169 @@ fn compute(
         );
     }
     Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boatmath::params::Closure;
+
+    fn test_study_params(froude: f64, dynamic: bool, grid: usize) -> StudyParams {
+        StudyParams {
+            froude,
+            dynamic,
+            closure: Closure::default(),
+            grid,
+            astern: None,
+            waves: None,
+        }
+    }
+
+    #[test]
+    fn warm_start_picks_nearest_froude_on_same_case() {
+        let mut known = Known::default();
+        let p_fn2 = test_study_params(0.2, true, 40);
+        let p_fn4 = test_study_params(0.4, true, 40);
+
+        let st_c1_fn2 = json!({
+            "type": "study",
+            "id": "s1",
+            "case": "c1",
+            "params": p_fn2,
+        });
+        let res_c1_fn2 = json!({
+            "type": "result",
+            "id": "s1",
+            "study": "s1",
+            "forces": {
+                "solved": true,
+                "sinkage": 0.05,
+                "trim_rad": 0.01,
+            }
+        });
+
+        // Record c1 at Fn 0.2
+        known.record(&st_c1_fn2, &res_c1_fn2);
+
+        // Querying c1 at Fn 0.3 should find Fn 0.2
+        let p_fn3 = test_study_params(0.3, true, 40);
+        assert_eq!(known.warm_start("c1", &p_fn3), Some((0.05, 0.01)));
+
+        // Querying c2 should return None
+        assert_eq!(known.warm_start("c2", &p_fn3), None);
+
+        // Querying non-dynamic study should return None
+        let p_fn3_static = test_study_params(0.3, false, 40);
+        assert_eq!(known.warm_start("c1", &p_fn3_static), None);
+
+        // Record c1 at Fn 0.4
+        let st_c1_fn4 = json!({
+            "type": "study",
+            "id": "s2",
+            "case": "c1",
+            "params": p_fn4,
+        });
+        let res_c1_fn4 = json!({
+            "type": "result",
+            "id": "s2",
+            "study": "s2",
+            "forces": {
+                "solved": true,
+                "sinkage": 0.08,
+                "trim_rad": 0.02,
+            }
+        });
+        known.record(&st_c1_fn4, &res_c1_fn4);
+
+        // Fn 0.35 is closer to Fn 0.4 (diff 0.05 vs 0.15)
+        let p_fn35 = test_study_params(0.35, true, 40);
+        assert_eq!(known.warm_start("c1", &p_fn35), Some((0.08, 0.02)));
+
+        // Fn 0.25 is closer to Fn 0.2 (diff 0.05 vs 0.15)
+        let p_fn25 = test_study_params(0.25, true, 40);
+        assert_eq!(known.warm_start("c1", &p_fn25), Some((0.05, 0.01)));
+    }
+
+    #[test]
+    fn run_prepopulates_and_streams_in_order() {
+        let p1 = test_study_params(0.2, true, 40);
+        let p2 = test_study_params(0.3, true, 40);
+
+        let case = json!({
+            "type": "case",
+            "id": "c1",
+            "hull": "h1",
+            "mass": 1000.0,
+        });
+        let st1 = json!({
+            "type": "study",
+            "id": "s1",
+            "case": "c1",
+            "params": p1,
+        });
+        let st2 = json!({
+            "type": "study",
+            "id": "s2",
+            "case": "c1",
+            "params": p2,
+        });
+        let res1 = json!({
+            "type": "result",
+            "id": "s1",
+            "study": "s1",
+            "solver_version": SOLVER_VERSION,
+            "forces": {
+                "solved": true,
+                "sinkage": 0.05,
+                "trim_rad": 0.01,
+            }
+        });
+        let res2 = json!({
+            "type": "result",
+            "id": "s2",
+            "study": "s2",
+            "solver_version": SOLVER_VERSION,
+            "forces": {
+                "solved": true,
+                "sinkage": 0.07,
+                "trim_rad": 0.015,
+            }
+        });
+
+        let mut s = Stream::default();
+        s.push(case);
+        s.push(st1);
+        s.push(st2);
+        s.push(res1);
+        s.push(res2);
+
+        let mut out_bytes = Vec::new();
+        let mut out = Out::new(&mut out_bytes);
+        let cache = Cache::default();
+        let failed = run(
+            &s,
+            &mut out,
+            &cache,
+            &Options {
+                jobs: 2,
+                quiet: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(failed, 0);
+
+        let mut out_stream = Stream::default();
+        for line in String::from_utf8(out_bytes).unwrap().lines() {
+            if !line.trim().is_empty() {
+                let rec: Value = serde_json::from_str(line).unwrap();
+                out_stream.push(rec);
+            }
+        }
+
+        let results: Vec<&Value> = out_stream.of_type("result").collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["id"], "s1");
+        assert_eq!(results[1]["id"], "s2");
+    }
 }

@@ -9,6 +9,13 @@
 /*.hull
 /*.csv
 /*.json
+/*.jsonl
+/*.pdf
+/*.png
+/*.svg
+/*.offsets
+/.polyscope.ini
+/imgui.ini
 # boatmath-web's default store of hulls, cases and results
 /boatmath-data/
 .DS_Store

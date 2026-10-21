@@ -1,4 +1,4 @@
-name: Rust formatting
+name: CI
 
 on:
   pull_request:
@@ -10,23 +10,29 @@ permissions:
   contents: read
 
 concurrency:
-  group: rustfmt-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  rustfmt:
-    name: cargo fmt
+  ci:
+    name: Formatter, Clippy & Tests
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Install stable Rust with rustfmt
+      - name: Install stable Rust with rustfmt and clippy
         run: |
           rustup update stable --no-self-update
           rustup default stable
-          rustup component add rustfmt
+          rustup component add rustfmt clippy
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Clippy check
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests (release)
+        run: cargo test --workspace --release
