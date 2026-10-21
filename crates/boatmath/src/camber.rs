@@ -43,6 +43,14 @@ pub fn is_document(v: &Value) -> bool {
     v.get("sheerPlan").is_some()
 }
 
+/// Whether these bytes are a camber hull document.
+pub fn is_camber(bytes: &[u8]) -> bool {
+    if !crate::native::is_native(bytes) {
+        return false;
+    }
+    serde_json::from_slice::<Value>(bytes).is_ok_and(|v| is_document(&v))
+}
+
 // ---------------------------------------------------------------------------
 // The document
 // ---------------------------------------------------------------------------

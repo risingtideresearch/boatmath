@@ -1,4 +1,4 @@
-//! `boatmath` — hulls, cases and studies on the `thinship`, `seakeeping` and `hullgeom` solvers: the
+//! `boatmath` — hulls, cases and studies on the `thinship`, `seakeeping`, `propeller` and `hullgeom` solvers: the
 //! computations the web app (`boatmath-web`) and the CLI share.
 //!
 //! A hull is seen the way the physics sees it: cut into sections.
@@ -9,6 +9,7 @@
 //! depth-integral curve the kernel interpolates along x, the hydrostatics,
 //! and the transom with what the closure needs to draw its virtual appendage
 //! at any speed.
+#![allow(clippy::type_complexity, clippy::single_element_loop)]
 
 use crate::files::{open_source_bytes, Kind, LoadSettings};
 use hullgeom::iges::{HullPose, Platform, SectionalImport};
@@ -33,7 +34,7 @@ use params::{CaseParams, StudyParams};
 pub use platform::{at_rest, heeled, statics, wave_gz, waves_with_progress};
 
 /// The solver version results are stamped with: the last commit to touch
-/// the solver's code (the geometry, thin-ship, seakeeping and CLI crates,
+/// the solver's code (the geometry, thin-ship, seakeeping, propeller and CLI crates,
 /// and this one), `-dirty` if they have uncommitted changes. Set by
 /// `build.rs`; `BOATMATH_SOLVER_VERSION` at build time overrides it.
 pub const SOLVER_VERSION: &str = env!("BOATMATH_SOLVER_VERSION");
@@ -135,15 +136,13 @@ pub fn loft(name: &str, bytes: Vec<u8>, req: &LoftRequest) -> Result<Value, Stri
 /// about the design waterline.
 pub fn geometry(name: &str, bytes: Vec<u8>, req: &LoftRequest) -> Result<Value, String> {
     let settings = LoadSettings {
+        waterline_z: req.waterline.unwrap_or(0.0),
+        waterline: req.waterline,
         units: req.units,
         ..LoadSettings::default()
     };
-    let file = if native::is_native(&bytes) {
-        native::open(&bytes)?
-    } else {
-        files::open_geometry(name, bytes, &settings)?
-    };
-    let wl = req.waterline.unwrap_or(0.0);
+    let file = files::open_geometry(name, bytes, &settings)?;
+    let wl = req.waterline.unwrap_or(file.waterline_z);
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
     let mut meshes = Vec::new();
     for i in 0..file.source.len() {
@@ -183,16 +182,13 @@ fn cut(name: &str, bytes: Vec<u8>, req: &LoftRequest) -> Result<Cut, String> {
     let d = LoadSettings::default();
     let settings = LoadSettings {
         waterline_z: req.waterline.unwrap_or(0.0),
+        waterline: req.waterline,
         centerplane: req.centerplane,
         stations: req.stations.unwrap_or(d.stations),
         rays: req.rays.unwrap_or(d.rays),
         units: req.units,
     };
-    let file = if native::is_native(&bytes) {
-        native::open(&bytes)?
-    } else {
-        open_source_bytes(name, bytes, &settings)?
-    };
+    let file = open_source_bytes(name, bytes, &settings)?;
     let opts = settings.sectional(file.waterline_z);
     let mut notes = Vec::new();
     let mut hulls = Vec::new();
@@ -484,6 +480,21 @@ pub(crate) fn setup(
             .unwrap_or_default()
     } else {
         Default::default()
+    };
+    let (bytes, source_roles, source_cross) = if let Some(ref m) = c.mount {
+        if source_roles.iter().all(|(r, _)| r == "hull") {
+            let geom = native::from_file(name, bytes.clone(), cut_req)?;
+            let bare = loft(name, bytes, cut_req)?;
+            let (mounted_g, _) = mount::mounted(&geom, &bare, m)?;
+            let roles = mount::roles(&mounted_g);
+            let cross = mount::cross_flows(&mounted_g);
+            let mounted_bytes = serde_json::to_vec(&mounted_g).map_err(|e| e.to_string())?;
+            (mounted_bytes, roles, cross)
+        } else {
+            (bytes, source_roles, source_cross)
+        }
+    } else {
+        (bytes, source_roles, source_cross)
     };
     let role_of = |i: usize| -> (String, Option<f64>) {
         source_roles

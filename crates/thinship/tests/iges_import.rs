@@ -502,9 +502,7 @@ fn offset_one_sided_hull_is_rejected_without_centerplane() {
     // centerplane is supplied.
     let half = wigley_iges_offset_starboard();
     let src = iges::source_fleet(&half, 0.7).unwrap();
-    let err = cut_posed(&src, 0, 0.7, &HullPose::default(), None)
-        .err()
-        .expect("rejected");
+    let err = cut_posed(&src, 0, 0.7, &HullPose::default(), None).expect_err("rejected");
     assert!(
         format!("{err}").contains("centerplane"),
         "unexpected error: {err}"

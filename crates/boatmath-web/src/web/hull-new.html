@@ -21,10 +21,10 @@
   <section>
     <div id="drop">
       <strong>Drop a hull file</strong>
-      or click to choose — IGES or STL
+      or click to choose — IGES, STL or Camber JSON
       <div class="fname" id="fname"></div>
     </div>
-    <input type="file" id="file" hidden accept=".igs,.iges,.stl">
+    <input type="file" id="file" hidden accept=".igs,.iges,.stl,.json">
   </section>
 
   <section>
@@ -49,7 +49,7 @@
         <input id="units" type="text" placeholder="mm, m, in…">
       </label>
     </div>
-    <p class="hint">The waterline is the design waterline's height in the file's frame, in metres; the hull floats there at its design displacement, and cases sink, trim or scale it from there. STL carries no units, so give its scale.</p>
+    <p class="hint">The waterline is the design waterline's height in the file's frame, in metres; the hull floats there at its design displacement, and cases sink, trim or scale it from there. STL carries no units, so give its scale. Camber JSON documents carry their own units and design waterline.</p>
   </section>
 
   <section>

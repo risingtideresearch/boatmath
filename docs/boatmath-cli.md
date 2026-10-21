@@ -208,6 +208,26 @@ just before it. Statics that fail are still written, with `error` in place
 of the numbers. The id is that of the hull or case, so a statics record is
 its hull's or case's statics whatever else is in the stream.
 
+### gz-waves
+
+Quasi-static roll stability on a regular wave, from `gz-waves --length L --height H`:
+
+```json
+{ "type": "gz_waves", "id": "…", "case": "<case id>",
+  "length": 10.0, "height": 0.5,
+  "wave": { "length": 10.0, "height": 0.5 },
+  "heel_deg": [ 0, 3, 6, … ],
+  "calm": { "gz": [ … ], "max_gz": …, "heel_at_max_deg": …, "energy_to_peak": … },
+  "headings": [
+    { "heading_deg": 90, "name": "beam", "worst": { … }, "curves": [ … ] },
+    { "heading_deg": 45, "name": "stern quartering", "worst": { … }, "curves": [ … ] },
+    { "heading_deg": 135, "name": "bow quartering", "worst": { … }, "curves": [ … ] }
+  ],
+  "mass": …, "weight": …, "vcg": …, "seconds": …, "solver_version": "…" }
+```
+
+A `gz_waves` record computes the worst wave crest position (giving the least energy to reach peak GZ) along eight crest phases for beam, stern-quartering and bow-quartering regular seas, beside the calm-water GZ curve. Because it links `"case"`, downstream commands (`table`, `plot`, `pick`) can resolve `case.params.*` and explode `headings` or `calm.gz` seamlessly.
+
 ### study
 
 ```json
@@ -322,6 +342,7 @@ See [Propellers and motors](#propellers-and-motors).
 | `mount (--stock NAME \| --kind K …)` | case* → + case* | the propulsion drive each case carries: its leg, pod or shaft and strut, and where its propeller sits |
 | `mounts` | → stock_mount* | the stock mounts `mount --stock` knows |
 | `statics` | hull*/case* → + statics*, sections* | each hull's hydrostatics, each case's float at rest and stability (and, for a case, its sections at rest) |
+| `gz-waves --length LIST --height LIST` | case* → + gz_waves* | quasi-static GZ curve in regular waves of given length(s) and height(s) across beam, stern-quartering and bow-quartering seas |
 | `study --froude LIST [--hold] [--closure C] [--grid N] [--astern L] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
 | `run [-j N] [-q]` | study* → + result*, field*, sections* | compute each study |
 | `prop [--d-max L --wake --thrust-deduction --blades LIST --keller-k --top-froude F …]` | result* → + prop* | the best B-series propeller for each result's speed and thrust, on its case's drive |
@@ -509,9 +530,10 @@ What each step does with a mount:
   `T = R_t / ((1 − t) cos ε)`, ε the thrust line's angle to the flow: the
   shaft angle plus the running trim (zero, give or take the trim, for a
   saildrive or outboard). The propeller sees `V_A cos ε` along its axis and
-  `V_A sin ε` across it; the B-series takes the axial part, and the cross
-  flow, which loads the blades cyclically and brings cavitation on early,
-  is flagged above a few degrees (`oblique` in the prop record).
+  `V_A sin ε` across it; Gutsche's oblique-flow correction integrates the
+  cyclic blade loading over each revolution into the B-series polynomials and
+  reduces the cavitation margin for cross-flow, flagged when oblique (`oblique`
+  in the prop record).
 - **Wake and thrust deduction.** Being members of the platform, the
   drive's parts are in both: their potential flow is in the wake at the disc
   (a pod directly ahead of its propeller is most of a saildrive's or pod
@@ -775,20 +797,16 @@ boatmath statics < g150.jsonl | boatmath cad --heel 15,45 -o g150-gz.igs
 
 ## Not yet
 
-- `gz-waves`: quasi-static GZ in a regular wave (`platform::wave_gz`).
 - `show`: open a hull, case or result in the 3-D viewer.
-- STEP output, real propeller blades (propopt's `propgeom.py`), and CAD
-  surfaces for STL hulls.
+- STEP output and interactive 3D viewer (`boatmath show`).
 - Pictures of results in waves (RAOs are a `plot --explode` away already).
 - propopt's Python-only work: the BEM correction for an extended or scanned
   geometry (`--geometry`), and its own hull models (the hull pipeline
   replaces those).
-- Mounts: `shaft` after the other three; a correction to the propeller's
-  thrust and torque in oblique flow (Gutsche), beyond the flag; the
+- Mounts: `shaft` after the other three; the
   stock-mount table itself (Oceanvolt, ePropulsion and Fischer Panda, each
   entry from the maker's installation drawings).
-- The rest of the wake and thrust deduction: the frictional wake (a
-  boundary-layer estimate), the propeller's own waves in the thrust
+- The rest of the wake and thrust deduction: the propeller's own waves in the thrust
   deduction, and a bottom-pressure term for flat runs and transoms.
 - Warm starts: the web worker starts each equilibrium from the nearest
   speed already solved. `run` starts every one from scratch.

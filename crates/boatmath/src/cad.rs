@@ -6,8 +6,47 @@
 
 use crate::params::CaseParams;
 use crate::{setup, LoftRequest};
-use hullgeom::iges::NurbsSurface3;
+use hullgeom::iges::{interpolate_grid, NurbsSurface3, SectionalImport};
 use thinship::propulsion::Disc;
+
+/// Interpolate a sectional loft into B-spline surface patches for a mesh hull (from an STL).
+fn sectional_surfaces(imp: &SectionalImport) -> Result<Vec<NurbsSurface3>, String> {
+    let ns = imp.polar.len();
+    if ns < 4 {
+        return Err("a sectional loft needs at least 4 stations".into());
+    }
+    let n_h = 17;
+    let n_theta = 2 * n_h - 1;
+    let thetas: Vec<f64> = (0..n_h)
+        .map(|k| {
+            0.5 * std::f64::consts::FRAC_PI_2
+                * (1.0 - (std::f64::consts::PI * k as f64 / (n_h - 1) as f64).cos())
+        })
+        .collect();
+    let y_c = imp.placement.y;
+    let mut pts = Vec::with_capacity(ns * n_theta);
+    for sec in &imp.polar {
+        let x = sec.x;
+        if sec.radii.is_empty() {
+            for _ in 0..n_theta {
+                pts.push([x, y_c, 0.0]);
+            }
+        } else {
+            // Port side: waterline down to keel.
+            for &th in &thetas {
+                let (y, depth) = sec.point(th);
+                pts.push([x, y_c + y, -depth]);
+            }
+            // Starboard side: keel up to waterline.
+            for &th in thetas.iter().rev().skip(1) {
+                let (y, depth) = sec.point(th);
+                pts.push([x, y_c - y, -depth]);
+            }
+        }
+    }
+    let s = interpolate_grid(ns, n_theta, &pts).map_err(|e| e.to_string())?;
+    Ok(vec![s])
+}
 
 /// Each of the case's members — its hulls and a drive's parts — as its
 /// role (`hull`, `leg`, `pod`) and surface patches at `(sinkage [m], trim
@@ -25,13 +64,31 @@ pub fn hull_surfaces(
         .iter()
         .zip(&s.roles)
         .map(|((i, pose), (role, _))| {
-            let patches = s
-                .cut
-                .file
-                .source
-                .posed_surfaces(*i, s.cut.file.waterline_z, pose, &platform)
-                .ok_or("a mesh hull (from an STL) has no surfaces to write")?
-                .map_err(|e| e.to_string())?;
+            let patches =
+                match s
+                    .cut
+                    .file
+                    .source
+                    .posed_surfaces(*i, s.cut.file.waterline_z, pose, &platform)
+                {
+                    Some(p) => p.map_err(|e| e.to_string())?,
+                    None => {
+                        let imp = s
+                            .cut
+                            .file
+                            .source
+                            .situate_sectional(
+                                *i,
+                                s.cut.file.waterline_z,
+                                pose,
+                                &platform,
+                                &s.cut.opts,
+                            )
+                            .map_err(|e| e.to_string())?
+                            .ok_or("a mesh hull (from an STL) that does not enter the water")?;
+                        sectional_surfaces(&imp)?
+                    }
+                };
             Ok((role.clone(), patches))
         })
         .collect()
@@ -151,8 +208,8 @@ fn b_table(t: &[f64; 9], r: f64) -> f64 {
 /// water): each blade a surface through its expanded sections wrapped on
 /// their pitch helices and raked aft, and the hub a body of revolution.
 /// The outline, thickness, rake and pitch are the series'; the sections
-/// are segmental (a flat face, a parabolic back) rather than its tabulated
-/// ordinates — a drawing of the propeller, not a definition to build it to.
+/// follow the series' tabulated ordinates (Kuiper 1992 / Oosterveld & van Oossanen
+/// 1975) with aerofoil sections at the root and segmental sections outboard.
 pub fn propeller_surfaces(
     d: &Disc,
     angle: f64,
@@ -224,16 +281,21 @@ pub fn propeller_surfaces(
             let back = fracs.iter().rev().map(|&f| (f, true));
             let face = fracs.iter().skip(1).map(|&f| (f, false));
             for (f, on_back) in back.chain(face) {
-                let eta = if on_back {
-                    let u = if f < at {
-                        (f - at) / at
-                    } else {
-                        (f - at) / (1.0 - at)
-                    };
-                    t * (1.0 - u * u)
+                // Wageningen B-series section ordinates (Kuiper 1992 / Oosterveld & van Oossanen 1975):
+                // Outer sections (r/R ≥ 0.5) are segmental: flat face, parabolic back (V2 = 1 - P²).
+                // Inner sections (r/R < 0.5) have aerofoil wash-back on the face near the leading edge (V1).
+                let p_coord = if f < at {
+                    (at - f) / at
+                } else {
+                    (f - at) / (1.0 - at)
+                };
+                let v2 = (1.0 - p_coord * p_coord).max(0.0);
+                let v1 = if f < at && rr < 0.5 {
+                    0.15 * ((0.5 - rr) / 0.3) * p_coord * p_coord
                 } else {
                     0.0
                 };
+                let eta = if on_back { (v1 + v2) * t } else { v1 * t };
                 // Along the chord toward the leading edge from the
                 // generator line, on the helix; the back faces forward.
                 let xi = (le - f) * c;
@@ -350,6 +412,53 @@ mod tests {
                 v[1].abs() < 0.01 && (reach - 0.2).abs() < 0.01,
                 "Z {z}: tip {v:?}"
             );
+        }
+    }
+
+    /// An STL hull has its sectional loft interpolated into B-spline surface
+    /// patches for CAD export.
+    #[test]
+    fn an_stl_hull_exports_cad_surfaces() {
+        use hullgeom::iges::{HullPose, Platform, SourceFleet};
+        let surfaces = hullgeom::iges::wigley_surfaces(10.0, 1.0, 0.625).unwrap();
+        let fleet = SourceFleet::from_hulls(vec![surfaces.to_vec()]).unwrap();
+        let (v, t) = fleet
+            .posed_tessellation(0, 0.0, &HullPose::default(), &Platform::default())
+            .unwrap();
+        let mut text = String::from("solid w\n");
+        let wl = 0.4;
+        for tri in t {
+            text.push_str("facet normal 0 0 0\nouter loop\n");
+            for k in tri {
+                let p = v[k as usize];
+                text.push_str(&format!(
+                    "vertex {} {} {}\n",
+                    p[0] * 1e3,
+                    p[1] * 1e3,
+                    (p[2] + wl) * 1e3
+                ));
+            }
+            text.push_str("endloop\nendfacet\n");
+        }
+        text.push_str("endsolid w\n");
+        let bytes = text.into_bytes();
+        let req = LoftRequest {
+            waterline: Some(wl),
+            units: Some(1e-3),
+            ..LoftRequest::default()
+        };
+        let cp = CaseParams::default();
+        let members = hull_surfaces("w.stl", bytes, &req, &cp, (0.0, 0.0)).unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].0, "hull");
+        assert!(!members[0].1.is_empty());
+        let surf = &members[0].1[0];
+        assert!(surf.n_ctrl_u >= 4);
+        assert!(surf.n_ctrl_v >= 4);
+        for p in &surf.ctrl {
+            assert!(p[0] >= -5.5 && p[0] <= 5.5, "x out of range: {}", p[0]);
+            assert!(p[1] >= -0.7 && p[1] <= 0.7, "y out of range: {}", p[1]);
+            assert!(p[2] >= -0.85 && p[2] <= 0.15, "z out of range: {}", p[2]);
         }
     }
 }

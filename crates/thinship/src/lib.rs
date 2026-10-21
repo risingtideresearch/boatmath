@@ -65,6 +65,12 @@
 //! assert!(r.wave.resistance > 0.0 && r.viscous_total > 0.0);
 //! assert!(r.total > r.wave.resistance);
 //! ```
+#![allow(
+    clippy::type_complexity,
+    clippy::needless_range_loop,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::err_expect
+)]
 
 #[cfg(test)]
 mod cut_tests;

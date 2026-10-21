@@ -6,7 +6,7 @@
 use crate::cache::Cache;
 use crate::stream::{id_of, sha256, short, Stream};
 use boatmath::params::{CaseParams, StudyParams};
-use boatmath::{hull_summary, loft, statics, LoftRequest, SOLVER_VERSION};
+use boatmath::{hull_summary, loft, statics, wave_gz, LoftRequest, SOLVER_VERSION};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -207,10 +207,7 @@ fn case_params_json(p: &CaseParams) -> Value {
 
 /// A case's params, for the solver.
 pub fn case_params(case: &Value) -> Result<CaseParams, String> {
-    let mut v = case["params"].clone();
-    if let Some(o) = v.as_object_mut() {
-        o.remove("mount");
-    }
+    let v = case["params"].clone();
     serde_json::from_value(v).map_err(|e| format!("case params: {e}"))
 }
 
@@ -271,7 +268,10 @@ pub fn case_source<'a>(s: &'a Stream, case: &Value) -> Result<CaseSource<'a>, St
     let hull = s.follow(case, "hull")?;
     let params = case_params(case)?;
     let mut src = hull_source(hull)?;
-    let mount = case_mount(case)?;
+    let mount = params
+        .mount
+        .clone()
+        .or_else(|| case_mount(case).ok().flatten());
     let mut thrusts = Vec::new();
     if let Some(m) = &mount {
         let bare = loft(&src.file_name, src.bytes.clone(), &src.import)?;
@@ -432,4 +432,95 @@ pub fn case_statics(s: &Stream, case: &Value, cache: &Cache) -> Result<Vec<Value
     cache.put(&r);
     out.push(r);
     Ok(out)
+}
+
+/// A case's quasi-static GZ in a regular wave of given length and height [m].
+pub fn gz_waves(
+    s: &Stream,
+    case: &Value,
+    length: f64,
+    height: f64,
+    cache: &Cache,
+) -> Result<Value, String> {
+    let case_id = expect(case, "case")?;
+    let id = id_of(&json!({ "case": case_id, "length": length, "height": height }));
+    if let Some(r) = cache.get("gz_waves", &id) {
+        return Ok(r);
+    }
+    let CaseSource { params, src, .. } = case_source(s, case)?;
+    let mut r = json!({
+        "type": "gz_waves",
+        "id": id,
+        "case": case_id,
+        "length": length,
+        "height": height,
+    });
+    match wave_gz(
+        &src.file_name,
+        src.bytes,
+        &src.import,
+        &params,
+        length,
+        height,
+    ) {
+        Ok(v) => {
+            let Value::Object(o) = v else {
+                return Err("wave_gz: not an object".into());
+            };
+            for (k, v) in o {
+                r[k] = v;
+            }
+        }
+        Err(e) => r["error"] = json!(e),
+    }
+    r["solver_version"] = json!(SOLVER_VERSION);
+    cache.put(&r);
+    Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn case_params_with_and_without_mount() {
+        let p_bare = CaseParams::default().canonical().unwrap();
+        let json_bare = case_params_json(&p_bare);
+        assert!(json_bare.get("mount").is_none());
+
+        let case_val = json!({
+            "type": "case",
+            "id": "abc",
+            "hull": "h123",
+            "params": json_bare,
+        });
+        let roundtrip = case_params(&case_val).unwrap();
+        assert_eq!(roundtrip.mount, None);
+
+        let mount = boatmath::mount::build(
+            Some("oceanvolt-sd8"),
+            &boatmath::mount::Options {
+                x: Some(2.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let mut p_mounted = p_bare.clone();
+        p_mounted.mount = Some(mount.clone());
+        let json_mounted = case_params_json(&p_mounted);
+        assert!(json_mounted.get("mount").is_some());
+
+        let case_mounted_val = json!({
+            "type": "case",
+            "id": "def",
+            "hull": "h123",
+            "params": json_mounted,
+        });
+        let roundtrip_mounted = case_params(&case_mounted_val).unwrap();
+        assert_eq!(roundtrip_mounted.mount, Some(mount.clone()));
+
+        let mounted_record = mounted_case(&case_val, &mount, None).unwrap();
+        assert_eq!(mounted_record["params"], json_mounted);
+    }
 }

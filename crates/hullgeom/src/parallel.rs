@@ -19,9 +19,10 @@
 //! each of them a budget of `cores / jobs` — or one — so the machine is not
 //! oversubscribed.
 //!
-//! The process-wide default can be pinned with the `MICHELL_THREADS`
-//! environment variable (a positive integer; `1` disables threading), which
-//! is handy for benchmarking and for sharing a machine.
+//! The process-wide default can be pinned with the `BOATMATH_THREADS`
+//! environment variable (falling back to `MICHELL_THREADS` for compatibility;
+//! a positive integer, `1` disables threading), which is handy for
+//! benchmarking and for sharing a machine.
 
 use std::cell::Cell;
 use std::num::NonZeroUsize;
@@ -33,12 +34,13 @@ thread_local! {
     static BUDGET: Cell<Option<NonZeroUsize>> = const { Cell::new(None) };
 }
 
-/// The default worker count: `MICHELL_THREADS` if set to a positive integer,
+/// The default worker count: `BOATMATH_THREADS` or `MICHELL_THREADS` if set to a positive integer,
 /// otherwise the machine's available parallelism (at least 1).
 pub fn available() -> usize {
     static DEFAULT: OnceLock<usize> = OnceLock::new();
     *DEFAULT.get_or_init(|| {
-        std::env::var("MICHELL_THREADS")
+        std::env::var("BOATMATH_THREADS")
+            .or_else(|_| std::env::var("MICHELL_THREADS"))
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
             .filter(|&n| n > 0)
