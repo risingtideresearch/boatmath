@@ -208,6 +208,26 @@ just before it. Statics that fail are still written, with `error` in place
 of the numbers. The id is that of the hull or case, so a statics record is
 its hull's or case's statics whatever else is in the stream.
 
+### gz-waves
+
+Quasi-static roll stability on a regular wave, from `gz-waves --length L --height H`:
+
+```json
+{ "type": "gz_waves", "id": "…", "case": "<case id>",
+  "length": 10.0, "height": 0.5,
+  "wave": { "length": 10.0, "height": 0.5 },
+  "heel_deg": [ 0, 3, 6, … ],
+  "calm": { "gz": [ … ], "max_gz": …, "heel_at_max_deg": …, "energy_to_peak": … },
+  "headings": [
+    { "heading_deg": 90, "name": "beam", "worst": { … }, "curves": [ … ] },
+    { "heading_deg": 45, "name": "stern quartering", "worst": { … }, "curves": [ … ] },
+    { "heading_deg": 135, "name": "bow quartering", "worst": { … }, "curves": [ … ] }
+  ],
+  "mass": …, "weight": …, "vcg": …, "seconds": …, "solver_version": "…" }
+```
+
+A `gz_waves` record computes the worst wave crest position (giving the least energy to reach peak GZ) along eight crest phases for beam, stern-quartering and bow-quartering regular seas, beside the calm-water GZ curve. Because it links `"case"`, downstream commands (`table`, `plot`, `pick`) can resolve `case.params.*` and explode `headings` or `calm.gz` seamlessly.
+
 ### study
 
 ```json
@@ -322,6 +342,7 @@ See [Propellers and motors](#propellers-and-motors).
 | `mount (--stock NAME \| --kind K …)` | case* → + case* | the propulsion drive each case carries: its leg, pod or shaft and strut, and where its propeller sits |
 | `mounts` | → stock_mount* | the stock mounts `mount --stock` knows |
 | `statics` | hull*/case* → + statics*, sections* | each hull's hydrostatics, each case's float at rest and stability (and, for a case, its sections at rest) |
+| `gz-waves --length LIST --height LIST` | case* → + gz_waves* | quasi-static GZ curve in regular waves of given length(s) and height(s) across beam, stern-quartering and bow-quartering seas |
 | `study --froude LIST [--hold] [--closure C] [--grid N] [--astern L] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
 | `run [-j N] [-q]` | study* → + result*, field*, sections* | compute each study |
 | `prop [--d-max L --wake --thrust-deduction --blades LIST --keller-k --top-froude F …]` | result* → + prop* | the best B-series propeller for each result's speed and thrust, on its case's drive |
@@ -775,10 +796,8 @@ boatmath statics < g150.jsonl | boatmath cad --heel 15,45 -o g150-gz.igs
 
 ## Not yet
 
-- `gz-waves`: quasi-static GZ in a regular wave (`platform::wave_gz`).
 - `show`: open a hull, case or result in the 3-D viewer.
-- STEP output, real propeller blades (propopt's `propgeom.py`), and CAD
-  surfaces for STL hulls.
+- STEP output and interactive 3D viewer (`boatmath show`).
 - Pictures of results in waves (RAOs are a `plot --explode` away already).
 - propopt's Python-only work: the BEM correction for an extended or scanned
   geometry (`--geometry`), and its own hull models (the hull pipeline

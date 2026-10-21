@@ -197,6 +197,16 @@ enum Command {
     /// Statics of the stream's hulls (hydrostatics at the design waterline)
     /// and cases (the float at rest, roll stability, the GZ curve).
     Statics,
+    /// Quasi-static GZ in a regular wave (platform::wave_gz).
+    #[command(name = "gz-waves")]
+    GzWaves {
+        /// Wavelength(s) [m]; a LIST.
+        #[arg(long)]
+        length: String,
+        /// Wave height(s) [m]; a LIST.
+        #[arg(long)]
+        height: String,
+    },
     /// Studies on the stream's cases: one per case and combination of the LISTs.
     Study {
         /// Length Froude numbers; a LIST.
@@ -644,8 +654,9 @@ fn rows_of<'a>(
         return s.of_type(k).collect();
     }
     let res = path::Resolver::new(s);
-    const ORDER: [&str; 10] = [
-        "drive", "prop", "result", "statics", "study", "case", "hull", "motor", "sections", "field",
+    const ORDER: [&str; 11] = [
+        "drive", "prop", "result", "gz_waves", "statics", "study", "case", "hull", "motor",
+        "sections", "field",
     ];
     for k in ORDER {
         let rs: Vec<&Value> = s.of_type(k).collect();
@@ -689,6 +700,41 @@ fn list(s: &Option<String>, what: &str) -> Result<Option<Vec<f64>>, String> {
     s.as_deref()
         .map(|s| list::parse(s).map_err(|e| format!("--{what}: {e}")))
         .transpose()
+}
+
+fn parse_lengths(s: &str, what: &str) -> Result<Vec<f64>, String> {
+    let num = |t: &str| units::length(t).map_err(|e| format!("--{what}: {e}"));
+    let mut out = Vec::new();
+    for part in s.split(',').filter(|p| !p.trim().is_empty()) {
+        let bits: Vec<&str> = part.split(':').collect();
+        match bits[..] {
+            [x] => out.push(num(x)?),
+            [a, b, step] => {
+                let (a, b, step) = (num(a)?, num(b)?, num(step)?);
+                if step <= 0.0 || b < a {
+                    return Err(format!(
+                        "--{what} {part}: expected start:stop:step, start ≤ stop, step > 0"
+                    ));
+                }
+                let n = ((b - a) / step + 1e-9).floor() as usize;
+                if n > 10_000 {
+                    return Err(format!("--{what} {part}: more than 10000 values"));
+                }
+                let digits = (-step.log10().floor()).max(0.0) as i32 + 6;
+                let scale = 10f64.powi(digits);
+                out.extend((0..=n).map(|i| ((a + i as f64 * step) * scale).round() / scale));
+            }
+            _ => {
+                return Err(format!(
+                    "--{what} {part}: expected a number or start:stop:step"
+                ))
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("--{what} {s:?}: an empty list"));
+    }
+    Ok(out)
 }
 
 fn closure(s: &str) -> Result<Closure, String> {
@@ -973,6 +1019,28 @@ fn go(cli: Cli) -> Result<usize, String> {
                         }
                     }
                     Err(e) => failed += fail("case", id, e),
+                }
+            }
+        }
+        Command::GzWaves { length, height } => {
+            let lengths = parse_lengths(&length, "length")?;
+            let heights = parse_lengths(&height, "height")?;
+            let s = read()?;
+            out.pass(&s)?;
+            for c in s.of_type("case") {
+                let id = c["id"].as_str().unwrap_or("");
+                for &l in &lengths {
+                    for &h in &heights {
+                        match records::gz_waves(&s, c, l, h, &cache) {
+                            Ok(r) => {
+                                if let Some(e) = r["error"].as_str() {
+                                    failed += fail("case", id, e.to_string());
+                                }
+                                out.emit(&r)?;
+                            }
+                            Err(e) => failed += fail("case", id, e),
+                        }
+                    }
                 }
             }
         }
@@ -1492,4 +1560,125 @@ fn go(cli: Cli) -> Result<usize, String> {
         }
     }
     Ok(failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_lengths_parses_units_and_ranges() {
+        assert_eq!(parse_lengths("10", "length").unwrap(), vec![10.0]);
+        assert_eq!(parse_lengths("10m", "length").unwrap(), vec![10.0]);
+        assert_eq!(parse_lengths("500mm", "length").unwrap(), vec![0.5]);
+        assert_eq!(
+            parse_lengths("5, 10, 15", "length").unwrap(),
+            vec![5.0, 10.0, 15.0]
+        );
+        assert_eq!(
+            parse_lengths("5m, 10m, 15m", "length").unwrap(),
+            vec![5.0, 10.0, 15.0]
+        );
+        assert_eq!(
+            parse_lengths("5:15:5", "length").unwrap(),
+            vec![5.0, 10.0, 15.0]
+        );
+        assert_eq!(
+            parse_lengths("5m:15m:5m", "length").unwrap(),
+            vec![5.0, 10.0, 15.0]
+        );
+    }
+
+    #[test]
+    fn gz_waves_on_wigley_case() {
+        let surfaces = hullgeom::iges::wigley_surfaces(10.0, 1.0, 1.0).unwrap();
+        let iges_text = hullgeom::iges::write(&surfaces, "wigley").unwrap();
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_wigley_gz_waves.igs");
+        std::fs::write(&path, iges_text).unwrap();
+
+        let req = LoftRequest {
+            waterline: Some(-0.375),
+            ..LoftRequest::default()
+        };
+        let hull = records::hull_from_file(&path, Some("wigley"), req).unwrap();
+        let cp = CaseParams {
+            vcg: Some(-0.3),
+            ..CaseParams::default()
+        };
+        let case = records::case(&hull, cp, Some("c1")).unwrap();
+        let mut s = Stream::default();
+        s.push(hull.clone());
+        s.push(case.clone());
+
+        let cache = Cache::default();
+        let gz = records::gz_waves(&s, &case, 10.0, 0.2, &cache).unwrap();
+        assert!(gz["error"].is_null(), "{}", gz["error"]);
+        assert_eq!(gz["type"], "gz_waves");
+        assert_eq!(gz["case"], case["id"]);
+        assert_eq!(gz["length"], 10.0);
+        assert_eq!(gz["height"], 0.2);
+        assert_eq!(gz["solver_version"], boatmath::SOLVER_VERSION);
+
+        let headings = gz["headings"].as_array().unwrap();
+        assert_eq!(headings.len(), 3);
+        assert_eq!(headings[0]["name"], "beam");
+        assert_eq!(headings[1]["name"], "stern quartering");
+        assert_eq!(headings[2]["name"], "bow quartering");
+        assert!(gz["calm"]["max_gz"].as_f64().unwrap() > 0.0);
+
+        s.push(gz.clone());
+
+        // Ancestor link test
+        let parents = stream::parents(&gz);
+        assert!(parents
+            .iter()
+            .any(|(t, id)| t == "case" && id == case["id"].as_str().unwrap()));
+
+        // Table / resolver test: explode headings
+        let res = path::Resolver::new(&s);
+        let rows = rows_of(&s, &None, "name", Some("headings"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], gz["id"]);
+        let exploded = res.rows(rows[0], Some("headings"));
+        assert_eq!(exploded.len(), 3);
+        for row in &exploded {
+            assert!(res.get_in(row, rows[0], "name").is_some());
+            assert_eq!(res.get_in(row, rows[0], "length").unwrap(), 10.0);
+            assert_eq!(res.get_in(row, rows[0], "height").unwrap(), 0.2);
+            assert!(res.get_in(row, rows[0], "case.params.mass").is_some());
+        }
+
+        // Plot / resolver test: explode headings for heading_deg vs worst.max_gz
+        let p_rows = rows_of(&s, &None, "heading_deg", Some("headings"));
+        assert_eq!(p_rows.len(), 1);
+        let p_exploded = res.rows(p_rows[0], Some("headings"));
+        let mut series = Vec::new();
+        for row in &p_exploded {
+            let x = res
+                .get_in(row, p_rows[0], "heading_deg")
+                .and_then(|v| v.as_f64())
+                .unwrap();
+            let y = res
+                .get_in(row, p_rows[0], "worst.max_gz")
+                .and_then(|v| v.as_f64())
+                .unwrap();
+            series.push((x, y));
+        }
+        assert_eq!(series.len(), 3);
+        let svg = plot::svg(&plot::Plot {
+            title: Some("Wigley GZ in Waves".into()),
+            x_label: "Heading [deg]".into(),
+            y_label: "Max GZ [m]".into(),
+            series: vec![plot::Series {
+                name: "worst".into(),
+                points: series,
+            }],
+        })
+        .unwrap();
+        assert!(svg.contains("<svg"));
+
+        // Clean up
+        let _ = std::fs::remove_file(path);
+    }
 }

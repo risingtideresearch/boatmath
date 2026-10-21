@@ -6,7 +6,7 @@
 use crate::cache::Cache;
 use crate::stream::{id_of, sha256, short, Stream};
 use boatmath::params::{CaseParams, StudyParams};
-use boatmath::{hull_summary, loft, statics, LoftRequest, SOLVER_VERSION};
+use boatmath::{hull_summary, loft, statics, wave_gz, LoftRequest, SOLVER_VERSION};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -432,6 +432,50 @@ pub fn case_statics(s: &Stream, case: &Value, cache: &Cache) -> Result<Vec<Value
     cache.put(&r);
     out.push(r);
     Ok(out)
+}
+
+/// A case's quasi-static GZ in a regular wave of given length and height [m].
+pub fn gz_waves(
+    s: &Stream,
+    case: &Value,
+    length: f64,
+    height: f64,
+    cache: &Cache,
+) -> Result<Value, String> {
+    let case_id = expect(case, "case")?;
+    let id = id_of(&json!({ "case": case_id, "length": length, "height": height }));
+    if let Some(r) = cache.get("gz_waves", &id) {
+        return Ok(r);
+    }
+    let CaseSource { params, src, .. } = case_source(s, case)?;
+    let mut r = json!({
+        "type": "gz_waves",
+        "id": id,
+        "case": case_id,
+        "length": length,
+        "height": height,
+    });
+    match wave_gz(
+        &src.file_name,
+        src.bytes,
+        &src.import,
+        &params,
+        length,
+        height,
+    ) {
+        Ok(v) => {
+            let Value::Object(o) = v else {
+                return Err("wave_gz: not an object".into());
+            };
+            for (k, v) in o {
+                r[k] = v;
+            }
+        }
+        Err(e) => r["error"] = json!(e),
+    }
+    r["solver_version"] = json!(SOLVER_VERSION);
+    cache.put(&r);
+    Ok(r)
 }
 
 #[cfg(test)]
