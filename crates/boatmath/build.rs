@@ -9,6 +9,7 @@ const SOLVER: &[&str] = &[
     "../hullgeom/src",
     "../thinship/src",
     "../seakeeping/src",
+    "../propeller/src",
     "src",
 ];
 

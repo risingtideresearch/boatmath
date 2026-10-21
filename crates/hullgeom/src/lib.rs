@@ -39,6 +39,13 @@
 //! every trial pose; a hydrodynamic crate can fold a speed-dependent load
 //! into the same solve through [`float::DynamicModel`].
 
+#![allow(
+    clippy::type_complexity,
+    clippy::needless_range_loop,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::suspicious_arithmetic_impl
+)]
+
 pub mod bspline;
 mod conditions;
 mod error;
