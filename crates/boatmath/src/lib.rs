@@ -9,7 +9,11 @@
 //! depth-integral curve the kernel interpolates along x, the hydrostatics,
 //! and the transom with what the closure needs to draw its virtual appendage
 //! at any speed.
-#![allow(clippy::type_complexity, clippy::single_element_loop)]
+#![allow(
+    clippy::type_complexity,
+    clippy::single_element_loop,
+    clippy::neg_cmp_op_on_partial_ord
+)]
 
 use crate::files::{open_source_bytes, Kind, LoadSettings};
 use hullgeom::iges::{HullPose, Platform, SectionalImport};
@@ -20,6 +24,7 @@ use thinship::{Conditions, Placement, WaveOptions, STANDARD_GRAVITY};
 pub mod cad;
 pub mod camber;
 pub mod files;
+pub mod lift;
 pub mod mount;
 pub mod native;
 pub mod params;
@@ -233,6 +238,67 @@ struct Counted<'a, R> {
     report: R,
     /// A load added to every evaluation: the drives' thrust.
     extra: hullgeom::float::DynamicLoad,
+    /// The hulls' lift, when the study asks for it.
+    lift: Option<Lifting<'a>>,
+}
+
+/// The hulls' 2D+t lift as a load on the platform (see [`lift`]).
+struct Lifting<'a> {
+    cond: &'a Conditions,
+    /// The pitch pivot, in fleet coordinates.
+    x_ref: f64,
+    /// Which members are hulls (the rest, a drive's parts, don't lift).
+    hulls: Vec<bool>,
+    /// Each member's run angle the lift is measured from (see
+    /// [`lift::sectional_lift`]).
+    reference: Vec<f64>,
+}
+
+impl<'a> Lifting<'a> {
+    /// The lift `model` asks for, on `s`'s hulls.
+    fn new(model: params::LiftModel, s: &Setup, cond: &'a Conditions, x_ref: f64) -> Self {
+        Lifting {
+            cond,
+            x_ref,
+            hulls: s.roles.iter().map(|r| r.0 == "hull").collect(),
+            reference: s
+                .design
+                .iter()
+                .map(|(h, _)| match model {
+                    params::LiftModel::TwoDT => lift::run_angle(h),
+                    params::LiftModel::TwoDTRun => 0.0,
+                })
+                .collect(),
+        }
+    }
+
+    /// Each lifting member's lift at its attitude (`None` for the rest).
+    fn lifts(&self, members: &[(SectionalHull, Placement)]) -> Vec<Option<lift::Lift>> {
+        // A fleet that lost a member (dry) no longer lines up with the
+        // roles: lift them all — a leg or a pod carries next to nothing.
+        let known = members.len() == self.hulls.len();
+        members
+            .iter()
+            .enumerate()
+            .map(|(i, (h, _))| {
+                (!known || self.hulls[i]).then(|| {
+                    let reference = self.reference.get(i).copied().unwrap_or(0.0);
+                    lift::sectional_lift(h, self.cond, reference)
+                })
+            })
+            .collect()
+    }
+
+    fn load(&self, members: &[(SectionalHull, Placement)]) -> hullgeom::float::DynamicLoad {
+        let mut d = hullgeom::float::DynamicLoad::default();
+        for (l, (_, p)) in self.lifts(members).iter().zip(members) {
+            if let Some(l) = l {
+                d.force_up += l.patch.force();
+                d.moment_bow_up += l.patch.moment_bow_up(self.x_ref - p.x);
+            }
+        }
+        d
+    }
 }
 
 impl<R> hullgeom::float::DynamicModel<SectionalHull> for Counted<'_, R>
@@ -246,6 +312,11 @@ where
         let mut d = self.inner.load(fleet)?;
         d.force_up += self.extra.force_up;
         d.moment_bow_up += self.extra.moment_bow_up;
+        if let Some(l) = &self.lift {
+            let ld = l.load(&fleet.members);
+            d.force_up += ld.force_up;
+            d.moment_bow_up += ld.moment_bow_up;
+        }
         let vol: f64 = fleet
             .members
             .iter()
@@ -259,7 +330,12 @@ where
         &mut self,
         fleet: &hullgeom::float::FleetState<SectionalHull>,
     ) -> Option<thinship::Result<hullgeom::float::DynamicLoad>> {
-        let extra = self.extra;
+        let mut extra = self.extra;
+        if let Some(l) = &self.lift {
+            let ld = l.load(&fleet.members);
+            extra.force_up += ld.force_up;
+            extra.moment_bow_up += ld.moment_bow_up;
+        }
         self.inner.probe(fleet).map(|r| {
             r.map(|mut d| {
                 d.force_up += extra.force_up;
@@ -780,6 +856,7 @@ pub fn flow_with_progress(
             inner,
             report,
             extra,
+            lift: study.lift.map(|m| Lifting::new(m, &s, &cond, lcg)),
         };
         let eq = solve_equilibrium_sectional_dynamic(
             &sources,
@@ -938,11 +1015,22 @@ pub fn flow_with_progress(
     )?;
     let t_field = t0.elapsed().as_secs_f64() - t_attitude;
 
-    let res = thinship::sectional::multihull_resistance(
-        &members,
-        &cond,
-        &wave,
-        &thinship::ViscousOptions::default(),
+    let viscous = thinship::ViscousOptions {
+        form_factor: study.form_factor.unwrap_or(0.0),
+        roughness: study
+            .roughness
+            .map_or(thinship::Roughness::None, thinship::Roughness::DeltaCf),
+    };
+    // The hulls' lift at the attitude, as pressure in the waves beside
+    // their thickness.
+    let lifts: Vec<Option<lift::Lift>> = match study.lift {
+        Some(m) => Lifting::new(m, &s, &cond, lcg).lifts(&at_attitude),
+        None => Vec::new(),
+    };
+    let patches: Vec<Option<&thinship::pressure::PressurePatch>> =
+        lifts.iter().map(|l| l.as_ref().map(|l| &l.patch)).collect();
+    let res = thinship::sectional::multihull_resistance_lifted(
+        &members, &patches, &cond, &wave, &viscous,
     )
     .map_err(|e| e.to_string())?;
 
@@ -1025,8 +1113,8 @@ pub fn flow_with_progress(
     // members are, but at their own form factors (Hoerner's, for a foil and
     // for a body of revolution) rather than the hull's; an inclined shaft
     // adds the drag of the flow across it, at its angle to the flow (its
-    // own plus the trim).
-    let k_hull = thinship::ViscousOptions::default().form_factor;
+    // own plus the trim). The roughness allowance is the skin's, so every
+    // part carries it.
     let (mut rv, mut r_app) = (0.0, 0.0);
     let parts_known = res.viscous.len() == s.roles.len();
     let q = 0.5 * rho * cond.speed * cond.speed;
@@ -1036,14 +1124,31 @@ pub fn flow_with_progress(
                 let cross = s.cross.get(k).copied().flatten().map_or(0.0, |c| {
                     q * c.area * c.cd * (c.angle + platform.trim).sin().abs().powi(3)
                 });
-                let r = v.resistance * (1.0 + kp) / (1.0 + k_hull) + cross;
+                let r = ((1.0 + kp) * v.cf + v.roughness_cf) * q * v.wetted_surface + cross;
                 rv += r;
                 r_app += r;
             }
             _ => rv += v.resistance,
         }
     }
-    let rt = res.wave.resistance + rv;
+    // A transom running dry: the water no longer closes in behind it, so the
+    // hull loses the hydrostatic thrust ρg∫∫z dA the transom's face would
+    // carry — faded in across the closure's own wet-to-dry band of Fn_T.
+    // Thin-ship theory has no term for it, closure or not.
+    let r_transom: f64 = if study.transom_drag {
+        members
+            .iter()
+            .filter_map(|(h, _)| h.transom())
+            .filter(|t| t.depth > 0.0)
+            .map(|t| {
+                let fn_t = cond.speed / (cond.gravity * t.depth).sqrt();
+                rho * cond.gravity * t.depth_moment * thinship::transom_dryness(fn_t)
+            })
+            .sum()
+    } else {
+        0.0
+    };
+    let rt = res.wave.resistance + rv + r_transom;
     let q_s = 0.5
         * rho
         * cond.speed
@@ -1052,6 +1157,16 @@ pub fn flow_with_progress(
     let mut forces = forces;
     if s.roles.iter().any(|r| r.0 != "hull") {
         forces["r_appendages_viscous"] = json!(r_app);
+    }
+    if study.transom_drag {
+        forces["r_transom"] = json!(r_transom);
+    }
+    if study.lift.is_some() {
+        let lifting: Vec<&lift::Lift> = lifts.iter().flatten().collect();
+        forces["lift"] = json!(lifting.iter().map(|l| l.patch.force()).sum::<f64>());
+        forces["lift_alpha_deg"] = json!(
+            lifting.iter().map(|l| l.alpha.to_degrees()).sum::<f64>() / lifting.len().max(1) as f64
+        );
     }
     for (k, v) in [
         ("rw", res.wave.resistance),

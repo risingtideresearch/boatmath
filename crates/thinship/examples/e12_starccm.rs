@@ -11,7 +11,7 @@
 use hullgeom::float::{self, FleetState, LoadCase};
 use hullgeom::iges::{self, HullPose, Platform, SectionalOptions};
 use hullgeom::Placement;
-use thinship::{sectional, Conditions, TransomClosure, WaveOptions};
+use thinship::{sectional, transom_dryness, Conditions, TransomClosure, WaveOptions};
 
 struct StarCcmPoint {
     speed_kn: f64,
@@ -151,6 +151,18 @@ fn main() {
     let members: Vec<(&hullgeom::SectionalHull, Placement)> =
         eq.fleet.members.iter().map(|(h, p)| (h, *p)).collect();
 
+    if let Some(tr) = members[0].0.transom() {
+        println!(
+            "  Demihull transom:    x = {:.3} m, depth = {:.4} m, area = {:.4} m^2, M_z = {:.5} m^3",
+            tr.x, tr.depth, tr.area, tr.depth_moment
+        );
+        println!(
+            "  Dry-transom thrust:  {:.1} N per demihull ({:.1} N total when Fn_T >= 3.5)",
+            density * thinship::STANDARD_GRAVITY * tr.depth_moment,
+            2.0 * density * thinship::STANDARD_GRAVITY * tr.depth_moment
+        );
+    }
+
     let closures = [
         (
             "Auto (default)",
@@ -158,9 +170,22 @@ fn main() {
                 coeff: 1.414,
                 fraction: 0.5,
             },
+            false,
         ),
-        ("Ballistic", TransomClosure::Ballistic { coeff: 1.414 }),
-        ("None (off)", TransomClosure::None),
+        (
+            "Auto + Transom",
+            TransomClosure::Auto {
+                coeff: 1.414,
+                fraction: 0.5,
+            },
+            true,
+        ),
+        (
+            "Ballistic",
+            TransomClosure::Ballistic { coeff: 1.414 },
+            false,
+        ),
+        ("None (off)", TransomClosure::None, false),
     ];
 
     println!("\n================================================================================");
@@ -188,7 +213,7 @@ fn main() {
             "baseline"
         );
 
-        for (name, closure) in &closures {
+        for (name, closure, with_transom_drag) in &closures {
             let wave_opts = WaveOptions {
                 transom: *closure,
                 ..WaveOptions::default()
@@ -197,12 +222,28 @@ fn main() {
                 sectional::multihull_resistance(&members, &cond, &wave_opts, &Default::default())
                     .expect("multihull resistance");
 
-            let err_pct = 100.0 * (r.total - star.total_n) / star.total_n;
+            let r_transom: f64 = if *with_transom_drag {
+                members
+                    .iter()
+                    .filter_map(|(h, _)| h.transom())
+                    .filter(|t| t.depth > 0.0)
+                    .map(|t| {
+                        let fn_t = cond.speed / (cond.gravity * t.depth).sqrt();
+                        density * cond.gravity * t.depth_moment * transom_dryness(fn_t)
+                    })
+                    .sum()
+            } else {
+                0.0
+            };
+
+            let press_n = r.wave.resistance + r_transom;
+            let total_n = r.total + r_transom;
+            let err_pct = 100.0 * (total_n - star.total_n) / star.total_n;
             let err_str = format!("{:+5.1}%", err_pct);
 
             println!(
                 "{:>5} {:>7} {:>16} {:>10.1} {:>10.1} {:>10.1} {:>12}",
-                "", "", name, r.total, r.wave.resistance, r.viscous_total, err_str
+                "", "", name, total_n, press_n, r.viscous_total, err_str
             );
         }
         println!("{:-<77}", "");

@@ -520,6 +520,10 @@ mod tests {
             grid,
             astern: None,
             waves: None,
+            form_factor: None,
+            roughness: None,
+            transom_drag: false,
+            lift: None,
         }
     }
 

@@ -104,6 +104,13 @@ pub const AUTO_WET_FN_T: f64 = 2.5;
 /// … and above which it takes it as dry (a fraction of a wavelength).
 pub const AUTO_DRY_FN_T: f64 = 3.5;
 
+/// How dry a transom runs at transom Froude number `Fn_T = U/√(g·d_T)`: 0
+/// up to [`AUTO_WET_FN_T`], 1 from [`AUTO_DRY_FN_T`], a smoothstep between.
+pub fn transom_dryness(fn_t: f64) -> f64 {
+    let t = ((fn_t - AUTO_WET_FN_T) / (AUTO_DRY_FN_T - AUTO_WET_FN_T)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 impl Default for TransomClosure {
     fn default() -> Self {
         TransomClosure::Auto {
@@ -125,10 +132,8 @@ impl TransomClosure {
             TransomClosure::Auto { coeff, fraction } => {
                 let wet = coeff * (depth / nu).sqrt();
                 let dry = fraction * 2.0 * PI / nu;
-                // Fn_T² = U²/(g·d_T) = 1/(ν·d_T); smoothstep across the band.
-                let fn_t = 1.0 / (nu * depth).sqrt();
-                let t = ((fn_t - AUTO_WET_FN_T) / (AUTO_DRY_FN_T - AUTO_WET_FN_T)).clamp(0.0, 1.0);
-                let w = t * t * (3.0 - 2.0 * t);
+                // Fn_T² = U²/(g·d_T) = 1/(ν·d_T).
+                let w = transom_dryness(1.0 / (nu * depth).sqrt());
                 Some(wet + w * (dry - wet))
             }
             TransomClosure::Fixed { length } => Some(length),

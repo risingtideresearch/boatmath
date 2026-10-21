@@ -226,6 +226,23 @@ enum Command {
         /// default 1.5).
         #[arg(long)]
         astern: Option<f64>,
+        /// The hulls' form factor k, friction as (1 + k)·C_F (default 0, the
+        /// flat plate; a drive's parts keep their own).
+        #[arg(long)]
+        form_factor: Option<f64>,
+        /// Roughness allowance ΔC_F on every wetted part (default 0).
+        #[arg(long)]
+        roughness: Option<f64>,
+        /// Charge a transom running dry the hydrostatic thrust it loses,
+        /// ρg∫∫z dA, faded in with the transom Froude number.
+        #[arg(long)]
+        transom_drag: bool,
+        /// The hulls' dynamic lift, in the attitude and the waves: 2dt
+        /// (slender-body 2D+t on the sections at the attitude, at the trim's
+        /// angle of attack) or 2dt-run (at the run's whole angle, its
+        /// built-in rise or hook included).
+        #[arg(long)]
+        lift: Option<String>,
         /// In waves from these headings [deg, 180 head seas]; a LIST.
         #[arg(long, allow_hyphen_values = true)]
         waves: Option<String>,
@@ -1053,10 +1070,20 @@ fn go(cli: Cli) -> Result<usize, String> {
             closure: cl,
             grid,
             astern,
+            form_factor,
+            roughness,
+            transom_drag,
+            lift,
             waves,
             lambdas,
             sea: sea_arg,
         } => {
+            let lift = match lift.as_deref() {
+                None => None,
+                Some("2dt") => Some(boatmath::params::LiftModel::TwoDT),
+                Some("2dt-run") => Some(boatmath::params::LiftModel::TwoDTRun),
+                Some(other) => return Err(format!("--lift {other}: expected 2dt or 2dt-run")),
+            };
             let froudes = list::parse(&froude).map_err(|e| format!("--froude: {e}"))?;
             let closure = cl.as_deref().map(closure).transpose()?.unwrap_or_default();
             let lambdas = list(&lambdas, "lambdas")?;
@@ -1080,6 +1107,10 @@ fn go(cli: Cli) -> Result<usize, String> {
                             lambdas: lambdas.clone(),
                             sea,
                         }),
+                        form_factor,
+                        roughness,
+                        transom_drag,
+                        lift,
                     };
                     out.emit(&records::study(c, params)?)?;
                 }

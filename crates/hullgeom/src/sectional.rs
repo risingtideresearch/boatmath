@@ -256,6 +256,22 @@ impl SectionNodes {
         }
     }
 
+    /// `∫ z·f(z) dz = −Z′(0)`: the section's first moment of area about the
+    /// waterline, one side.
+    fn first_moment(&self) -> f64 {
+        match &self.nodes {
+            Nodes::Depth { z, w } => z.iter().zip(w).map(|(z, w)| w * z).sum(),
+            // Depth along a ray is z₀ + r·sin, so the moment's radial part is
+            // ∫ (z₀ + r·sin) r dr = z₀R²/2 + sin·R³/3.
+            Nodes::Polar { z0, sin, r, w } => sin
+                .iter()
+                .zip(r)
+                .zip(w)
+                .map(|((&sn, &r), &w)| w * (z0 * r * r / 2.0 + sn * r * r * r / 3.0))
+                .sum(),
+        }
+    }
+
     /// Number of quadrature nodes.
     pub fn len(&self) -> usize {
         match &self.nodes {
@@ -351,6 +367,10 @@ pub struct Transom {
     pub depth: f64,
     /// Immersed transom area, `2∫₀^T f_T(z) dz` [m²] — both sides.
     pub area: f64,
+    /// Its first moment about the waterline, `2∫₀^T z·f_T(z) dz` [m³] — both
+    /// sides: `ρg` times it is the hydrostatic thrust the water would put on
+    /// the transom's face.
+    pub depth_moment: f64,
     /// Half-beam at the waterline, `f_T(0)` [m].
     pub half_beam: f64,
 }
@@ -532,6 +552,7 @@ impl SectionalHull {
             x: self.xs[0],
             depth,
             area,
+            depth_moment: 2.0 * aft.first_moment(),
             half_beam: aft.waterline,
         })
     }
@@ -1090,7 +1111,26 @@ impl BandLu {
 
 #[cfg(test)]
 mod tests {
+    use super::{DepthQuadrature, SectionNodes};
     use crate::iges::{self, HullPose, Platform, SectionalOptions};
+
+    /// A section's first moment of area, `∫ z f dz`, from either quadrature:
+    /// `bT²/2` for a rectangle by depth, `bT²/3` for a quarter ellipse by
+    /// rays.
+    #[test]
+    fn section_first_moments_are_exact() {
+        let (b, t) = (0.4, 0.3);
+        let opts = DepthQuadrature::default();
+        let rect = SectionNodes::from_depth_function(t, &[], |_| b, &opts);
+        let ellipse = SectionNodes::from_polar(0.0, b, t, |_| 1.0, &opts);
+        for (what, s, want) in [
+            ("rectangle", rect, b * t * t / 2.0),
+            ("ellipse", ellipse, b * t * t / 3.0),
+        ] {
+            let m = s.first_moment();
+            assert!((m - want).abs() < 1e-10 * want, "{what}: {m} vs {want}");
+        }
+    }
 
     /// The Wigley hull `f = (B/2)(1 − ξ²)(1 − ζ²)`: `I_T = (4/105) B³ L`
     /// and the centre of buoyancy `3T/8` below the waterline.

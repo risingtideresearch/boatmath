@@ -299,6 +299,32 @@ pub struct StudyParams {
     /// In waves; `None` in calm water.
     #[serde(default)]
     pub waves: Option<Waves>,
+    /// The hulls' form factor `k`, as `(1 + k)·C_F` (`None`: 0, the flat
+    /// plate). A drive's parts keep their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form_factor: Option<f64>,
+    /// Roughness allowance `ΔC_F`, on every wetted part (`None`: smooth).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f64>,
+    /// Charge a transom running dry the hydrostatic thrust it loses.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transom_drag: bool,
+    /// The hulls' dynamic lift beside thin-ship theory's thickness, in the
+    /// attitude and in the waves (`None`: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lift: Option<LiftModel>,
+}
+
+/// How a study's hulls lift (see [`crate::lift`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LiftModel {
+    /// Slender-body 2D+t on the sections at the attitude, at the angle of
+    /// attack of the trim alone.
+    #[serde(rename = "2dt")]
+    TwoDT,
+    /// The same at the run's whole angle, trim and built-in together.
+    #[serde(rename = "2dt-run")]
+    TwoDTRun,
 }
 
 pub fn default_grid() -> usize {
@@ -327,6 +353,18 @@ impl StudyParams {
         }
         self.closure = self.closure.canonical()?;
         self.grid = self.grid.clamp(40, 1200);
+        // A zero is the default: dropped, so the study is the one without it.
+        for (name, v, hi) in [
+            ("form factor", &mut self.form_factor, 2.0),
+            ("roughness", &mut self.roughness, 0.01),
+        ] {
+            if let Some(x) = *v {
+                if !(0.0..=hi).contains(&x) {
+                    return Err(format!("{name} {x}: expected 0 to {hi}"));
+                }
+                *v = Some(x).filter(|&x| x > 0.0);
+            }
+        }
         if let Some(a) = self.astern {
             if !(a > 0.0 && a <= 20.0) {
                 return Err(format!("astern {a}: expected 0 < lengths ≤ 20"));
@@ -376,12 +414,18 @@ impl StudyParams {
     /// (any grid) and the studies in waves taken about it: its speed, attitude
     /// and closure.
     pub fn attitude_key(&self) -> String {
-        sha(&serde_json::to_string(&(self.froude, self.dynamic, self.closure)).expect("serialize"))
+        let key = (self.froude, self.dynamic, self.closure);
+        sha(&match self.lift {
+            // Without lift, the key it always had.
+            None => serde_json::to_string(&key),
+            Some(lift) => serde_json::to_string(&(key, lift)),
+        }
+        .expect("serialize"))
     }
 
     /// The same study at another speed: what a warm start may borrow from.
     pub fn same_but_speed(&self, other: &StudyParams) -> bool {
-        self.dynamic == other.dynamic && self.closure == other.closure
+        self.dynamic == other.dynamic && self.closure == other.closure && self.lift == other.lift
     }
 }
 
