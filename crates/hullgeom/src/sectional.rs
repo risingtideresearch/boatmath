@@ -673,15 +673,6 @@ impl SectionalHull {
     /// Everything that depends on `κ`: each station's depth integral, and
     /// their interpolant along `x` in each span's power basis.
     pub fn contract(&self, kappa: f64, out: &mut SectionalContracted) {
-        self.contract_with_tangency(kappa, &[], out);
-    }
-
-    /// [`SectionalHull::contract`] with an optional boundary-layer tangency
-    /// slope correction `df_dx` (`∂δ*/∂x` per station; empty when disabled)
-    /// added to the longitudinal slope `g_fx` over each station's wetted
-    /// depth, leaving the geometric depth integrals `g_f`, `z_t`, and `z_b`
-    /// unchanged.
-    pub fn contract_with_tangency(&self, kappa: f64, df_dx: &[f64], out: &mut SectionalContracted) {
         let mut v: Vec<f64> = self.sections.iter().map(|s| s.integrate(kappa)).collect();
         out.any = v.iter().any(|&x| x != 0.0);
         out.z_t = v.first().copied().unwrap_or(0.0);
@@ -695,99 +686,6 @@ impl SectionalHull {
         }
         self.lu.solve(&mut v);
         self.power_into(&v, &mut out.g_f, &mut out.g_fx);
-        if df_dx.len() == self.sections.len() && df_dx.iter().any(|&x| x != 0.0) {
-            let mut w: Vec<f64> = self
-                .sections
-                .iter()
-                .zip(df_dx)
-                .map(|(s, &slope)| {
-                    if s.depth <= 0.0 || slope == 0.0 {
-                        0.0
-                    } else {
-                        let kt = kappa * s.depth;
-                        let iz = if kt.abs() < 1e-4 {
-                            s.depth * (1.0 - 0.5 * kt + kt * kt / 6.0)
-                        } else {
-                            (1.0 - (-kt).exp()) / kappa
-                        };
-                        slope * iz
-                    }
-                })
-                .collect();
-            self.lu.solve(&mut w);
-            let p = self.p;
-            for (s, &first) in self.span_first.iter().enumerate() {
-                let t = &self.taylor[s * (p + 1) * (p + 1)..(s + 1) * (p + 1) * (p + 1)];
-                let mut c_span = vec![0.0; p + 1];
-                for a in 0..=p {
-                    let row = &t[a * (p + 1)..(a + 1) * (p + 1)];
-                    c_span[a] = row
-                        .iter()
-                        .zip(&w[first..=first + p])
-                        .map(|(m, c)| m * c)
-                        .sum();
-                }
-                for a in 0..p {
-                    out.g_fx[s * p + a] += c_span[a];
-                }
-                // Project the top degree-p term onto degree 0..p-1 via the
-                // shifted Legendre polynomial on [0, L_s], preserving span
-                // moments up to degree p-1.
-                if p == 3 && c_span[3] != 0.0 {
-                    let l = self.spans[s].len;
-                    let c3 = c_span[3];
-                    out.g_fx[s * p] += 0.05 * l * l * l * c3;
-                    out.g_fx[s * p + 1] -= 0.6 * l * l * c3;
-                    out.g_fx[s * p + 2] += 1.5 * l * c3;
-                }
-            }
-        }
-    }
-
-    /// Boundary-layer displacement-thickness tangency slope `∂δ*/∂x` at each
-    /// station for unit-length Reynolds number `re_per_m = U / ν` [1/m].
-    ///
-    /// Integrates the 1/7th-power-law turbulent boundary layer (`H = 9/7`,
-    /// `dδ*/ds = 0.037 Re_s^(-1/5)`) from the bow (`x_max`) to the stern
-    /// (`x_min`), amplified over the closing afterbody (`∂f̄/∂x > 0`) by the
-    /// von Kármán momentum-integral adverse-pressure-gradient factor `(H + 2)`.
-    pub fn boundary_layer_tangency(&self, re_per_m: f64) -> Vec<f64> {
-        let n = self.xs.len();
-        if n < 2 || !(re_per_m > 0.0) {
-            return vec![0.0; n];
-        }
-        let f_bar: Vec<f64> = self
-            .sections
-            .iter()
-            .map(|s| {
-                if s.depth > 1e-6 {
-                    s.integrate(0.0) / s.depth
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        let f_max = f_bar.iter().copied().fold(0.0f64, f64::max).max(1e-6);
-        let x_bow = self.xs[n - 1];
-        let l = (x_bow - self.xs[0]).max(1e-6);
-        let mut df_dx = vec![0.0; n];
-        let mut delta_star = 0.0;
-        let s0 = 1e-4 * l;
-        df_dx[n - 1] = -0.037 * (re_per_m * s0).max(1e3).powf(-0.2);
-        // Shape factor H = 9/7 for 1/7th-power profile -> H + 2 = 23/7.
-        const H_PLUS_2: f64 = 23.0 / 7.0;
-        for i in (0..n - 1).rev() {
-            let ds = (self.xs[i + 1] - self.xs[i]).max(1e-9);
-            let s = (x_bow - self.xs[i]).max(1e-4 * l);
-            let re_s = (re_per_m * s).max(1e3);
-            let g_fp = 0.037 * re_s.powf(-0.2);
-            let fx_closing = ((f_bar[i + 1] - f_bar[i]) / ds).max(0.0);
-            let alpha = H_PLUS_2 * fx_closing / f_max;
-            delta_star = (delta_star + ds * g_fp) / (1.0 - (alpha * ds).min(0.5));
-            let d_delta_ds = g_fp + alpha * delta_star;
-            df_dx[i] = -d_delta_ds;
-        }
-        df_dx
     }
 
     /// Length between the end stations' knots [m].

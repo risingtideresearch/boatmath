@@ -171,7 +171,6 @@ fn main() {
                 fraction: 0.5,
             },
             false,
-            false,
         ),
         (
             "Auto + Transom",
@@ -180,30 +179,13 @@ fn main() {
                 fraction: 0.5,
             },
             true,
-            false,
-        ),
-        (
-            "Auto+Trans+BL",
-            TransomClosure::Auto {
-                coeff: 1.414,
-                fraction: 0.5,
-            },
-            true,
-            true,
         ),
         (
             "Ballistic",
             TransomClosure::Ballistic { coeff: 1.414 },
             false,
-            false,
         ),
-        (
-            "Ballistic + BL",
-            TransomClosure::Ballistic { coeff: 1.414 },
-            false,
-            true,
-        ),
-        ("None (off)", TransomClosure::None, false, false),
+        ("None (off)", TransomClosure::None, false),
     ];
 
     println!("\n================================================================================");
@@ -231,10 +213,9 @@ fn main() {
             "baseline"
         );
 
-        for (name, closure, with_transom_drag, with_bl) in &closures {
+        for (name, closure, with_transom_drag) in &closures {
             let wave_opts = WaveOptions {
                 transom: *closure,
-                boundary_layer: *with_bl,
                 ..WaveOptions::default()
             };
             let r =

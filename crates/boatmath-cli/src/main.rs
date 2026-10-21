@@ -243,10 +243,6 @@ enum Command {
         /// built-in rise or hook included).
         #[arg(long)]
         lift: Option<String>,
-        /// Include the turbulent boundary-layer displacement-thickness (δ*)
-        /// tangency slope correction in Michell's wave-resistance integral.
-        #[arg(long)]
-        boundary_layer: bool,
         /// In waves from these headings [deg, 180 head seas]; a LIST.
         #[arg(long, allow_hyphen_values = true)]
         waves: Option<String>,
@@ -1078,7 +1074,6 @@ fn go(cli: Cli) -> Result<usize, String> {
             roughness,
             transom_drag,
             lift,
-            boundary_layer,
             waves,
             lambdas,
             sea: sea_arg,
@@ -1116,7 +1111,6 @@ fn go(cli: Cli) -> Result<usize, String> {
                         roughness,
                         transom_drag,
                         lift,
-                        boundary_layer,
                     };
                     out.emit(&records::study(c, params)?)?;
                 }

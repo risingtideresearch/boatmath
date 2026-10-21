@@ -151,9 +151,6 @@ pub struct WaveOptions {
     pub max_refinements: usize,
     /// How to close a transom stern. Inert for a hull that closes aft.
     pub transom: TransomClosure,
-    /// Include the turbulent boundary-layer displacement-thickness (`δ*`)
-    /// tangency slope correction in the Michell source amplitude.
-    pub boundary_layer: bool,
 }
 
 impl Default for WaveOptions {
@@ -162,7 +159,6 @@ impl Default for WaveOptions {
             rel_tol: 1e-5,
             max_refinements: 4,
             transom: TransomClosure::default(),
-            boundary_layer: false,
         }
     }
 }

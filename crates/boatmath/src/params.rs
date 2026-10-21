@@ -313,10 +313,6 @@ pub struct StudyParams {
     /// attitude and in the waves (`None`: none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lift: Option<LiftModel>,
-    /// Include the turbulent boundary-layer displacement-thickness (`δ*`)
-    /// tangency slope correction in the Michell wave-resistance integral.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub boundary_layer: bool,
 }
 
 /// How a study's hulls lift (see [`crate::lift`]).
