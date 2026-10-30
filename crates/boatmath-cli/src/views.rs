@@ -136,8 +136,11 @@ fn b64_encode(bytes: &[u8]) -> String {
 pub(crate) fn f32s(v: &Value, what: &str) -> Result<Vec<f32>, String> {
     let bytes = b64_decode(v.as_str().ok_or_else(|| format!("field: no {what}"))?)?;
     Ok(bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .copied()
+        .map(f32::from_le_bytes)
         .collect())
 }
 

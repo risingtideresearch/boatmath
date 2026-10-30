@@ -478,6 +478,104 @@ pub fn gz_waves(
     Ok(r)
 }
 
+/// A hull's gross and net tonnage under Transport Canada TP 13430 Part 3.
+pub fn hull_tonnage(
+    hull: &Value,
+    params: &boatmath::tonnage::TonnageParams,
+    cache: &Cache,
+) -> Result<Value, String> {
+    let hull_id = expect(hull, "hull")?;
+    let p = params.clone().canonical()?;
+    let id = id_of(&json!({ "hull": hull_id, "params": p }));
+    if let Some(r) = cache.get("tonnage", &id) {
+        return Ok(r);
+    }
+    let src = hull_source(hull)?;
+    let mut r = json!({
+        "type": "tonnage",
+        "id": id,
+        "hull": hull_id,
+        "case": null,
+    });
+    match boatmath::tonnage::hull_tonnage(&src.file_name, src.bytes, &src.import, &p) {
+        Ok(Value::Object(o)) => {
+            for (k, v) in o {
+                r[k] = v;
+            }
+        }
+        Ok(_) => return Err("tonnage: not an object".into()),
+        Err(e) => r["error"] = json!(e),
+    }
+    r["solver_version"] = json!(SOLVER_VERSION);
+    cache.put(&r);
+    Ok(r)
+}
+
+/// A case's gross and net tonnage under Transport Canada TP 13430 Part 3.
+pub fn case_tonnage(
+    s: &Stream,
+    case: &Value,
+    params: &boatmath::tonnage::TonnageParams,
+    cache: &Cache,
+) -> Result<Value, String> {
+    let case_id = expect(case, "case")?;
+    let hull_id = case["hull"].as_str().ok_or("case: no hull")?;
+    let p = params.clone().canonical()?;
+    let id = id_of(&json!({ "case": case_id, "params": p }));
+    if let Some(r) = cache.get("tonnage", &id) {
+        return Ok(r);
+    }
+    let CaseSource {
+        params: cp, src, ..
+    } = case_source(s, case)?;
+    let mut r = json!({
+        "type": "tonnage",
+        "id": id,
+        "hull": hull_id,
+        "case": case_id,
+    });
+    match boatmath::tonnage::case_tonnage(&src.file_name, src.bytes, &src.import, &cp, &p) {
+        Ok(Value::Object(o)) => {
+            for (k, v) in o {
+                r[k] = v;
+            }
+        }
+        Ok(_) => return Err("tonnage: not an object".into()),
+        Err(e) => r["error"] = json!(e),
+    }
+    r["solver_version"] = json!(SOLVER_VERSION);
+    cache.put(&r);
+    Ok(r)
+}
+
+/// Gross and net tonnage under Transport Canada TP 13430 Part 3 from
+/// principal dimensions given outright (without a stream hull).
+pub fn outright_tonnage(
+    hulls: &[boatmath::tonnage::HullDimensions],
+    params: &boatmath::tonnage::TonnageParams,
+) -> Result<Value, String> {
+    let mut p = params.clone();
+    p.tml = None;
+    p.tmb = None;
+    p.tmd = None;
+    let p = p.canonical()?;
+    let v = boatmath::tonnage::compute(hulls, &p, Vec::new())?;
+    let id = id_of(&json!({ "hulls": v["hulls"], "params": p }));
+    let mut r = json!({
+        "type": "tonnage",
+        "id": id,
+        "hull": null,
+        "case": null,
+    });
+    if let Value::Object(o) = v {
+        for (k, val) in o {
+            r[k] = val;
+        }
+    }
+    r["solver_version"] = json!(SOLVER_VERSION);
+    Ok(r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
