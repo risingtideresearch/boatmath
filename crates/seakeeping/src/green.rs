@@ -27,9 +27,7 @@
 //! handles it even where a source panel meets the waterline.
 
 use hullgeom::C64;
-use std::f64::consts::PI;
-
-const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+use std::f64::consts::{EULER_GAMMA, PI};
 
 /// Beyond this `|w|` the continued fraction is used; below it the power
 /// series (whose terms peak near `e^{|w|}`, so at most ~5 digits are lost).

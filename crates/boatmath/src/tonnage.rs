@@ -940,6 +940,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn round2_follows_tp13430_s_3_3_1() {
         close(round2(0.0), 0.0);
         close(round2(1.004), 1.00);
