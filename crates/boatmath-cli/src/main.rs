@@ -207,6 +207,53 @@ enum Command {
         #[arg(long)]
         height: String,
     },
+    /// Gross and net tonnage under Transport Canada TP 13430 Part 3 (vessels
+    /// under 24 m in statutory length), measured on the stream's cases (or
+    /// hulls, when there are no cases) or from dimensions given outright.
+    Tonnage {
+        /// Hull form for GTC: power (0.16), sail (0.08) or barge (0.20).
+        #[arg(long, default_value = "power")]
+        kind: String,
+        /// Propulsion for NTC: power (0.75), sail (0.95) or none (1.00);
+        /// default from --kind (barge defaults to none).
+        #[arg(long)]
+        propulsion: Option<String>,
+        /// Tonnage Measurement Length (m, ft, in, cm, mm); outright or override.
+        #[arg(long)]
+        tml: Option<String>,
+        /// Tonnage Measurement Breadth at mid-TML; outright or override.
+        #[arg(long)]
+        tmb: Option<String>,
+        /// Tonnage Measurement Depth at mid-TML; outright or override.
+        #[arg(long)]
+        tmd: Option<String>,
+        /// Number of identical hulls when giving --tml, --tmb and --tmd outright.
+        #[arg(long)]
+        hulls: Option<usize>,
+        /// Outright hull dimensions TMLxTMBxTMD; repeat for asymmetric multi-hulls.
+        #[arg(long = "hull-dims")]
+        hull_dims: Vec<String>,
+        /// Upper-deck height at side at mid-TML, above the design waterline.
+        #[arg(long, allow_hyphen_values = true)]
+        deck_z: Option<String>,
+        /// Bottom-of-keel height at mid-TML, above the design waterline.
+        #[arg(long, allow_hyphen_values = true)]
+        keel_z: Option<String>,
+        /// Statutory length L (96% of 85%-depth waterline, or stem to rudder stock).
+        #[arg(long)]
+        reg_length: Option<String>,
+        /// Enclosed space or break above the upper deck as MLxMBxMH; repeat for several.
+        #[arg(long = "space")]
+        spaces: Vec<String>,
+        /// Tiers of superstructures/deckhouses above the upper deck (for the
+        /// s. 3.5.3.2 <= 15 m monohull exemption; default 1 when --space is given).
+        #[arg(long)]
+        tiers: Option<usize>,
+        /// Enclosed bridge structure connecting hulls below the upper deck as MLxMBxMH
+        /// (multi-hulls, s. 3.5.2.2); repeat for several.
+        #[arg(long = "bridge")]
+        bridges: Vec<String>,
+    },
     /// Studies on the stream's cases: one per case and combination of the LISTs.
     Study {
         /// Length Froude numbers; a LIST.
@@ -674,9 +721,9 @@ fn rows_of<'a>(
         return s.of_type(k).collect();
     }
     let res = path::Resolver::new(s);
-    const ORDER: [&str; 11] = [
-        "drive", "prop", "result", "gz_waves", "statics", "study", "case", "hull", "motor",
-        "sections", "field",
+    const ORDER: [&str; 12] = [
+        "drive", "prop", "result", "tonnage", "gz_waves", "statics", "study", "case", "hull",
+        "motor", "sections", "field",
     ];
     for k in ORDER {
         let rs: Vec<&Value> = s.of_type(k).collect();
@@ -755,6 +802,21 @@ fn parse_lengths(s: &str, what: &str) -> Result<Vec<f64>, String> {
         return Err(format!("--{what} {s:?}: an empty list"));
     }
     Ok(out)
+}
+
+fn parse_box(s: &str, what: &str) -> Result<boatmath::tonnage::Space, String> {
+    let parts: Vec<&str> = s.split(['x', '×']).collect();
+    let [l, b, h] = parts[..] else {
+        return Err(format!(
+            "--{what} {s:?}: expected LENGTHxBREADTHxHEIGHT (e.g. 3.5x2.2x1.9)"
+        ));
+    };
+    let len = |t: &str| units::length(t).map_err(|e| format!("--{what}: {e}"));
+    Ok(boatmath::tonnage::Space {
+        ml: len(l)?,
+        mb: len(b)?,
+        mh: len(h)?,
+    })
 }
 
 fn closure(s: &str) -> Result<Closure, String> {
@@ -1059,6 +1121,158 @@ fn go(cli: Cli) -> Result<usize, String> {
                                 out.emit(&r)?;
                             }
                             Err(e) => failed += fail("case", id, e),
+                        }
+                    }
+                }
+            }
+        }
+        Command::Tonnage {
+            kind,
+            propulsion,
+            tml,
+            tmb,
+            tmd,
+            hulls,
+            hull_dims,
+            deck_z,
+            keel_z,
+            reg_length,
+            spaces,
+            tiers,
+            bridges,
+        } => {
+            use boatmath::tonnage::{HullDimensions, HullKind, Propulsion, TonnageParams};
+            let len = |s: &Option<String>, w: &str| {
+                s.as_deref()
+                    .map(|v| units::length(v).map_err(|e| format!("--{w}: {e}")))
+                    .transpose()
+            };
+            let kind = HullKind::parse(&kind)?;
+            let propulsion = propulsion.as_deref().map(Propulsion::parse).transpose()?;
+            let tml = len(&tml, "tml")?;
+            let tmb = len(&tmb, "tmb")?;
+            let tmd = len(&tmd, "tmd")?;
+            let deck_z = len(&deck_z, "deck-z")?;
+            let keel_z = len(&keel_z, "keel-z")?;
+            let reg_length = len(&reg_length, "reg-length")?;
+            let spaces = spaces
+                .iter()
+                .map(|s| parse_box(s, "space"))
+                .collect::<Result<Vec<_>, _>>()?;
+            let bridges = bridges
+                .iter()
+                .map(|b| parse_box(b, "bridge"))
+                .collect::<Result<Vec<_>, _>>()?;
+            let tiers = tiers.unwrap_or(usize::from(!spaces.is_empty()));
+            let params = TonnageParams {
+                kind,
+                propulsion,
+                tml,
+                tmb,
+                tmd,
+                deck_z,
+                keel_z,
+                reg_length,
+                spaces,
+                tiers,
+                bridges,
+            }
+            .canonical()?;
+
+            let report = |r: &Value| {
+                let id = r["id"].as_str().unwrap_or("");
+                let n = r["hull_count"].as_u64().unwrap_or(1);
+                let form = match r["form"].as_str() {
+                    Some(f) => format!(", Form {f}"),
+                    None => String::new(),
+                };
+                eprintln!(
+                    "boatmath: tonnage {}: GT {:.2}, NT {:.2} ({n} hull{}, TML {:.2} m, TMB {:.2} m, TMD {:.2} m, GTC {:.2}, NTC {:.2}{form})",
+                    short(id),
+                    r["gt"].as_f64().unwrap_or(0.0),
+                    r["nt"].as_f64().unwrap_or(0.0),
+                    if n == 1 { "" } else { "s" },
+                    r["tml"].as_f64().unwrap_or(0.0),
+                    r["tmb"].as_f64().unwrap_or(0.0),
+                    r["tmd"].as_f64().unwrap_or(0.0),
+                    r["gtc"].as_f64().unwrap_or(0.0),
+                    r["ntc"].as_f64().unwrap_or(0.0),
+                );
+            };
+
+            if !hull_dims.is_empty() {
+                if tml.is_some()
+                    || tmb.is_some()
+                    || tmd.is_some()
+                    || hulls.is_some()
+                    || deck_z.is_some()
+                    || keel_z.is_some()
+                {
+                    return Err("use --hull-dims, or --tml/--tmb/--tmd, not both".into());
+                }
+                let dims = hull_dims
+                    .iter()
+                    .map(|s| {
+                        let bx = parse_box(s, "hull-dims")?;
+                        Ok(HullDimensions::from_dims(bx.ml, bx.mb, bx.mh))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                let r = records::outright_tonnage(&dims, &params)?;
+                report(&r);
+                out.emit(&r)?;
+            } else if let (Some(l), Some(b), Some(d), true, None, None) =
+                (tml, tmb, tmd, cli.inputs.is_empty(), deck_z, keel_z)
+            {
+                let n = hulls.unwrap_or(1);
+                if n == 0 {
+                    return Err("--hulls: expected at least 1".into());
+                }
+                let dims = vec![HullDimensions::from_dims(l, b, d); n];
+                let r = records::outright_tonnage(&dims, &params)?;
+                report(&r);
+                out.emit(&r)?;
+            } else {
+                if hulls.is_some() {
+                    return Err("--hulls goes with outright --tml, --tmb and --tmd".into());
+                }
+                let s = read()?;
+                out.pass(&s)?;
+                let cases: Vec<&Value> = s.of_type("case").collect();
+                if !cases.is_empty() {
+                    for c in cases {
+                        let id = c["id"].as_str().unwrap_or("");
+                        match records::case_tonnage(&s, c, &params, &cache) {
+                            Ok(r) => {
+                                if let Some(e) = r["error"].as_str() {
+                                    failed += fail("case", id, e.to_string());
+                                } else {
+                                    report(&r);
+                                }
+                                out.emit(&r)?;
+                            }
+                            Err(e) => failed += fail("case", id, e),
+                        }
+                    }
+                } else {
+                    let hs: Vec<&Value> = s.of_type("hull").collect();
+                    if hs.is_empty() {
+                        return Err(
+                            "no hulls or cases in the stream (or give --tml, --tmb and --tmd)"
+                                .into(),
+                        );
+                    }
+                    for h in hs {
+                        let id = h["id"].as_str().unwrap_or("");
+                        match records::hull_tonnage(h, &params, &cache) {
+                            Ok(r) => {
+                                if let Some(e) = r["error"].as_str() {
+                                    failed += fail("hull", id, e.to_string());
+                                } else {
+                                    report(&r);
+                                }
+                                out.emit(&r)?;
+                            }
+                            Err(e) => failed += fail("hull", id, e),
                         }
                     }
                 }

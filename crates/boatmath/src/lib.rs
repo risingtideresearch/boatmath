@@ -31,6 +31,7 @@ pub mod params;
 pub mod platform;
 pub mod propulsion;
 pub mod sections;
+pub mod tonnage;
 
 /// The diverging colour map the wake and pressure views share.
 pub use files::diverging;

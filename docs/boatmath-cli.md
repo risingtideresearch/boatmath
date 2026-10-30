@@ -228,6 +228,36 @@ Quasi-static roll stability on a regular wave, from `gz-waves --length L --heigh
 
 A `gz_waves` record computes the worst wave crest position (giving the least energy to reach peak GZ) along eight crest phases for beam, stern-quartering and bow-quartering regular seas, beside the calm-water GZ curve. Because it links `"case"`, downstream commands (`table`, `plot`, `pick`) can resolve `case.params.*` and explode `headings` or `calm.gz` seamlessly.
 
+### tonnage
+
+Gross and net tonnage for vessels less than 24 m in statutory length, under
+Canada's *Vessel Registration and Tonnage Regulations* (SOR/2007-126, Division 3)
+and Part 3 of Transport Canada's *Standard for the Tonnage Measurement of
+Vessels* (TP 13430):
+
+```json
+{ "type": "tonnage", "id": "…", "hull": "<hull id> | null", "case": "<case id> | null",
+  "regulation": "TP 13430 Part 3", "kind": "power", "propulsion": "power",
+  "gtc": 0.16, "ntc": 0.75, "hull_count": 1,
+  "tml": 8.63, "tmb": 0.84, "tmd": 0.52, "reg_length": 8.28,
+  "gt": 0.60, "nt": 0.45,
+  "hull_tonnage": 0.60, "bridge_tonnage": 0.0, "above_deck_tonnage": 0.0,
+  "above_deck_exempt": false, "owner_measurable": true, "form": "4A",
+  "hulls": [ { "tml": 8.63, "tmb": 0.84, "tmd": 0.52, "tonnage": 0.60,
+               "x_aft": …, "x_fore": …, "x_mid": …, "keel_z": …, "deck_z": …, "l_wl85": … } ],
+  "bridges": [], "spaces": [], "tiers": 0, "notes": [], "solver_version": "…" }
+```
+
+All linear dimensions are rounded to `0.01 m` and tonnages to two decimal places
+with a third decimal digit of `5` or more rounded up (TP 13430 s. 3.3.1). On a
+stream, `tonnage` measures the stream's `case` records (doubling a catamaran's
+demihull when `span` is set and ignoring `mount` appendages per s. 3.2.8), or
+its `hull` records when there are no cases; `TMB` and `TMD` are taken on the
+transverse section at the middle of `TML`, with `TMD` measured to the side edge
+of a cambered deck rather than its crown (s. 3.2.7.1). Vessels of 24 m or more
+in statutory length (96% of the 85%-depth waterline, or `--reg-length`) are
+refused.
+
 ### study
 
 ```json
@@ -343,6 +373,8 @@ See [Propellers and motors](#propellers-and-motors).
 | `mounts` | → stock_mount* | the stock mounts `mount --stock` knows |
 | `statics` | hull*/case* → + statics*, sections* | each hull's hydrostatics, each case's float at rest and stability (and, for a case, its sections at rest) |
 | `gz-waves --length LIST --height LIST` | case* → + gz_waves* | quasi-static GZ curve in regular waves of given length(s) and height(s) across beam, stern-quartering and bow-quartering seas |
+| `tonnage [--kind power\|sail\|barge] [--propulsion P] [--space MLxMBxMH…] [--bridge MLxMBxMH…] [--tiers N] [--deck-z Z --keel-z Z --reg-length L]` | hull*/case* → + tonnage* | Transport Canada gross and net tonnage (TP 13430 Part 3, < 24 m) measured on each case (or hull, with no cases) |
+| `tonnage --tml L --tmb B --tmd D [--hulls N] …` (or `--hull-dims LxBxD…`) | → tonnage | the same, from principal dimensions given outright |
 | `study --froude LIST [--hold] [--closure C] [--grid N] [--astern L] [--form-factor K] [--roughness DCF] [--transom-drag] [--lift 2dt] [--waves LIST --lambdas LIST --sea S]` | case* → + study* | requests for every combination |
 | `run [-j N] [-q]` | study* → + result*, field*, sections* | compute each study |
 | `prop [--d-max L --wake --thrust-deduction --blades LIST --keller-k --top-froude F …]` | result* → + prop* | the best B-series propeller for each result's speed and thrust, on its case's drive |
@@ -455,6 +487,37 @@ The SVG uses the reference categorical palette, with light and dark colours
 that follow the viewer's colour scheme. It has a legend for two or more
 series, a label at the end of each line for up to four, and a tooltip on
 every point. It takes at most eight series; narrow `--by` beyond that.
+
+### Tonnage
+
+`tonnage` computes Gross Tonnage (`GT`) and Net Tonnage (`NT`) for vessels
+under 24 m in statutory length according to Transport Canada's *Standard for
+the Tonnage Measurement of Vessels* (TP 13430, Part 3; SOR/2007-126 ss. 16–17):
+
+```sh
+boatmath hull cruiser.json | boatmath tonnage --kind sail | boatmath table hull.name tml tmb tmd gt nt form
+boatmath hull demihull.igs --waterline -0.4 | boatmath case --span 3.2 | boatmath tonnage --bridge 5.5x3.2x0.85
+boatmath tonnage --tml 12m --tmb 3.6m --tmd 1.8m --space 4.5x2.4x1.9
+```
+
+- **Coefficients:** `--kind` sets the Gross Tonnage Coefficient `GTC` (`power`
+  `0.16`, `sail` `0.08`, `barge` `0.20`, s. 3.2.3); `--propulsion` sets the Net
+  Tonnage Coefficient `NTC` (`power` `0.75`, `sail` `0.95`, `none` `1.00`,
+  s. 3.2.4, defaulting from `--kind` with `barge` defaulting to `none`).
+- **Spaces and bridges:** `--space MLxMBxMH` adds enclosed superstructures,
+  deckhouses or side-to-side breaks above the upper deck as `(ML·MB·MH)/2.83`
+  (s. 3.5.3.1), automatically applying the s. 3.5.3.2 exemption when the vessel
+  is a monohull of `TML ≤ 15 m` with at most one tier (`--tiers`) whose
+  combined `ML` does not exceed `70%` of `TML`. `--bridge MLxMBxMH` adds
+  enclosed bridge structures connecting multi-hull hulls below the upper deck
+  (s. 3.5.2.2).
+- **Overrides and eligibility:** `--deck-z` and `--keel-z` override the
+  upper-deck-at-side and bottom-of-keel heights [m, above the design waterline]
+  when a CAD model has a stepped deck (s. 3.2.7.2) or localized keel cutout at
+  mid-TML (SSB 17/2025); `--tml`, `--tmb`, `--tmd` and `--reg-length` override
+  principal dimensions directly. `form` reports `"4A"` or `"4B"` when the
+  vessel qualifies for owner measurement under s. 3.4.2, and `null` when an
+  Appointed Tonnage Measurer is required (s. 3.4.1).
 
 ### Mounts
 
@@ -807,6 +870,8 @@ boatmath statics < g150.jsonl | boatmath cad --heel 15,45 -o g150-gz.igs
   re-exports it and keeps the SQLite store, the worker and the pages, so both
   front ends compute the same way.
 - `crates/boatmath/src/sections.rs`: a case cut at an attitude, as JSON.
+- `crates/boatmath/src/tonnage.rs`: Transport Canada Part 3 gross and net
+  tonnage (< 24 m), from 3D hull/case geometry or outright dimensions.
 - `crates/boatmath/src/camber.rs`: camber's sweep, and its documents as
   patches; `tests/camber/make.mts` makes its golden data from camber.
 - `crates/boatmath/src/native.rs`: geometry as JSON, read from a file or
